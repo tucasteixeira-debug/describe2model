@@ -1,0 +1,487 @@
+# Elevator_System_3 -- monitoring layer: compare actual physics against a
+# nominal reference, catch slow drift with CUSUM.
+# See examples/elevator/Elevator_System_3/description.md for the plain-
+# English problem statement this was translated from.
+#
+# ALL dispatch/door logic below (Target_Floor's LOOK algorithm, Doors_Open,
+# Just_Arrived, the request latches, Clock_Pulse) is copied byte-for-byte
+# from Elevator_System_2's elevator_2.yaml -- not re-derived, not modified.
+# This file's only real additions are: two new runtime_inputs
+# (Nominal_Current_Floor, Nominal_Velocity_FloorsPerSec, written by a
+# second, independent physics plant -- see car_physics_3.py), and four new
+# operations at the bottom of this file computing a residual and running it
+# through a real CUSUM accumulator. Everything else is untouched, on
+# purpose -- this stage is meant to demonstrate "capability added around
+# the existing graph," and the smallest possible diff from Elevator_System_2
+# is the actual proof of that, not just a claim about it.
+#
+# The physical story: Elevator_System_2's Current_Floor came from a single
+# kinematic (accel/cruise/decel) plant, and there was nothing to compare it
+# against -- no other model existed, so it was definitionally "correct."
+# Here, TWO plants run every scan: a NominalPlant (the exact same
+# kinematic model from Elevator_System_2, unmodified, computing what a
+# HEALTHY car should be doing) and an ActualPlant (a genuine second-order
+# mass-spring-damper system, tracking the nominal plant's position/velocity
+# as a moving setpoint). Current_Floor -- the tag dispatch actually reads --
+# comes from ActualPlant, same as before. Nominal_Current_Floor is new,
+# plant-owned, and read by nothing except the residual/CUSUM operations
+# below. See car_physics_3.py for why the two plants are built this way
+# and, importantly, why the actual plant's damping degrading over usage is
+# a genuinely physically-motivated failure mode, not an arbitrary injected
+# number.
+#
+# Structural notes 1-6 below are carried over unchanged from
+# Elevator_System_2 -- still true here, since none of that logic changed.
+# A new note 7 at the end covers the monitoring layer specifically.
+#
+# 1. Current_Floor and Velocity_FloorsPerSec are declared under
+#    runtime_inputs, NOT outputs -- deliberately. In Elevator_System_1,
+#    Current_Floor was a CTUD operation the logic drove itself, which is
+#    exactly the authority a real logic controller doesn't have (see
+#    description.md). Here it's written every scan by an external physics
+#    plant (examples/elevator/Elevator_System_2/car_physics.py, called once
+#    per scan, AFTER run_scan() -- same seam engine/scan_cycle.py already
+#    reserves for physical_constants, just not exercised until now). From
+#    the engine's point of view that makes Current_Floor structurally
+#    identical to a sensor: a signal the world provides, that no operation
+#    produces. runtime_inputs already means exactly that ("external signals
+#    -- sensors, buttons, anything the world provides"), so it's the
+#    correct section, not a repurposed one. graph_builder never gives it a
+#    producer edge, same as Call_Floor0 -- nothing needed to change in the
+#    engine for this to work.
+#
+# 2. Moving is unchanged from Elevator_System_1's expression, but its role
+#    isn't cosmetic anymore. In Stage 1 it was a pure sink -- a display
+#    indicator nothing else read. Here the physics plant reads THIS tag
+#    directly as its run permission: true means "the motor may drive toward
+#    Target_Floor," false means "hold position," regardless of where
+#    Target_Floor points. It's still a graph-internal sink (no OPERATION
+#    reads it back, so there's still no cycle risk -- the plant runs
+#    strictly after run_scan() completes, never inside it), but it now has
+#    real authority outside the graph. Deliberately reused rather than
+#    duplicated into a separate "Command_Run" tag -- it was already exactly
+#    the right signal, just never wired to anything that could act on it.
+#    This is also the tag worth reading alongside Velocity_FloorsPerSec if
+#    you want to see the commanded-vs-actual split directly: Moving is what
+#    the logic commands, Velocity_FloorsPerSec is what the plant actually
+#    produces. Elevator_System_2 noted they "always agree" -- here, for the
+#    first time, they genuinely don't have to. See note 7.
+#
+# 3. This closes a real gap from Elevator_System_1 (its note 2): a second
+#    call arriving while doors are open could preempt Target_Floor mid-dwell
+#    and start the car moving before the door cycle finished, because the
+#    old CTUD's CU/CD never checked Doors_Open (checking it would have been
+#    a same-scan cycle inside the graph). Moving already includes
+#    "!Doors_Open" in its expression -- since the physics plant now reads
+#    Moving as its literal go/no-go signal, the car physically cannot start
+#    moving until Doors_Open goes false, even if Target_Floor already
+#    jumped to a new value during the dwell. No longer a documented
+#    simplification -- a genuine fix, free from moving physics outside the
+#    graph's cycle constraints entirely.
+#
+# 4. Door/request logic (Doors_Open, Just_Arrived_Level, Floor#_Request,
+#    Door_Elapsed) is untouched from Elevator_System_1. All of it already
+#    read Current_Floor purely through {var: "Current_Floor"} -- it has no
+#    idea whether that tag comes from an operation or a physics plant, and
+#    doesn't need to. This is the "capability added around the existing
+#    graph" pitch from PROJECT_STATE.md's Objective, working as intended.
+#
+# 5. Clock_Pulse keeps the same self-oscillating TON idiom and the same
+#    known PT+1 steady-state timing quirk documented for Elevator_System_1
+#    (see docs/architecture.md's "Known limitation" section) -- untouched,
+#    not revisited here.
+#
+# 6. Target_Floor implements real LOOK dispatch (see docs/architecture.md
+#    and Elevator_System_2's description.md for the full research and the
+#    proof this needed Current_Floor to be a runtime_input, not a CTUD).
+#    Call_At_Current_Floor exists so arrival detection doesn't race against
+#    Going_Up flipping direction in the same scan -- see its own note
+#    below, carried over unmodified from Elevator_System_2.
+#
+# 7. Velocity_Residual, Abs_Velocity_Residual, CUSUM_High, and CUSUM_Alarm
+#    are new. CUSUM_High is a stateless "if" operation that self-references
+#    its own output to accumulate -- confirmed empirically (not assumed)
+#    that graph_builder gives a stateless self-reference the same free
+#    pass a TON/CTUD's self-reference already gets: no producer edge, no
+#    cycle. First place in this project a STATELESS operation uses that
+#    exemption rather than a function block -- see docs/architecture.md
+#    for the general pattern, now documented there for reuse.
+#
+#    CUSUM watches |Velocity_Residual|, not signed Velocity_Residual --
+#    deliberately, and only after an empirical false start. The failure
+#    mode this stage models (damping degrading toward underdamped) shows
+#    up as growing OSCILLATION AROUND ZERO, not a shift to one side --
+#    confirmed by actually tracing a worn trip's residual, which is
+#    negative during the first part of each transition and positive
+#    during the next. A signed, two-sided CUSUM (separate accumulators
+#    watching each direction) mostly cancels itself out against a
+#    symmetric oscillation like that. CUSUM on the residual's magnitude is
+#    the standard, correct SPC tool for detecting growing spread rather
+#    than a shifted mean, and matches this stage's actual physics.
+#
+#    Threshold/slack tuning (Slack_K, Threshold_H) lives in
+#    hmi_configuration, not physical_constants, because these ARE
+#    referenced inside JsonLogic expressions below (physical_constants
+#    deliberately aren't wrapped as nodes, since nothing reads them that
+#    way -- see Elevator_System_2's own note on this).
+
+runtime_inputs:
+  Call_Floor0: {type: BOOL}
+  Call_Floor1: {type: BOOL}
+  Call_Floor2: {type: BOOL}
+  Call_Floor3: {type: BOOL}
+  Call_Floor4: {type: BOOL}
+  Call_Floor5: {type: BOOL}
+  Door_Obstruction: {type: BOOL}
+  Close_Door_Button: {type: BOOL, note: "Momentary, not a toggle -- see Elevator_System_1's identical note. A caller sets this True for exactly one scan per press, then clears it."}
+  Current_Floor: {type: REAL, note: "Written every scan by ActualPlant (the spring-damper), not an operation -- see note 1 above. This is the authoritative position dispatch reads; Nominal_Current_Floor below never is."}
+  Velocity_FloorsPerSec: {type: REAL, note: "ActualPlant's velocity. Read by Velocity_Residual below -- the first time in this project a plant-owned tag is actually consumed by an operation, not just exposed for observability."}
+  Nominal_Current_Floor: {type: REAL, note: "Written every scan by NominalPlant -- the unmodified Elevator_System_2 kinematic model, run purely as a reference and never authoritative. Not read by any dispatch operation, only by Velocity_Residual below."}
+  Nominal_Velocity_FloorsPerSec: {type: REAL, note: "NominalPlant's velocity -- what Velocity_Residual actually compares Velocity_FloorsPerSec against."}
+  Damping_Ratio: {type: REAL, note: "ActualPlant's current (wear-degraded) damping ratio. Not read by any operation -- observability only, so a simulation script can plot wear alongside the CUSUM trace, same reasoning Elevator_System_2 gave for exposing Velocity_FloorsPerSec in the first place."}
+
+hmi_configuration:
+  Door_Hold_Time: {type: REAL, default: 6}
+  Never: {type: BOOL, default: false}
+  One_Second: {type: REAL, default: 1}
+  Slack_K: {type: REAL, default: 0.02, note: "CUSUM's allowable slack, floors/second, applied to |Velocity_Residual|. Sized empirically, not by formula -- a healthy critically-damped system's transient tracking noise peaks around 0.011-0.045 floors/second at each accel/cruise/decel transition (confirmed by direct simulation, see description.md), so 0.02 sits inside that healthy noise band on purpose: a healthy run's CUSUM_High stays near zero (measured peak 0.0114 over 200 simulated round trips with zero wear) while still being small enough for real wear-driven residual to accumulate past it once damping degrades."}
+  Threshold_H: {type: REAL, default: 0.25, note: "CUSUM's alarm threshold. Tuned empirically against this file's actual trip-by-trip CUSUM trajectory, not derived from a formula: with the default Wear_Rate, CUSUM_High stays under 0.02 through roughly the first 20 trips, then grows sharply as Damping_Ratio drops through its most consequential range, crossing this threshold right around the trip where damping bottoms out (measured: trip 46, damping already at its floor of 0.15) -- not dozens of trips after, and not while damping is still mostly healthy. See description.md for the full tuning trace."}
+
+# Physical properties of the car and shaft, consumed only by the physics
+# plant's Python constructor -- never referenced in any operation's
+# JsonLogic expression, so (unlike hmi_configuration) these don't need to be
+# node-wrapped. Declared here anyway, in one place, rather than left as
+# hardcoded Python defaults -- same modularity reasoning as keeping every
+# other tunable constant in the YAML: one source of truth, not a number
+# quietly duplicated between this file and car_physics.py.
+physical_constants:
+  Top_Floor: {type: REAL, value: 5, note: "Upper position bound, shared by both plants. Nothing in the operations graph reads it -- neither Current_Floor nor Nominal_Current_Floor is an operation."}
+  Max_Velocity: {type: REAL, value: 0.5, note: "NominalPlant's cruise speed, floors/second. Unchanged from Elevator_System_2 -- see that stage's description.md for the ~2-second requirement this comes from. NominalPlant is otherwise byte-for-byte the same model, so this and the next two constants keep the same values and the same justification."}
+  Acceleration: {type: REAL, value: 0.25, note: "NominalPlant's, floors/second^2. Unchanged from Elevator_System_2."}
+  Deceleration: {type: REAL, value: 0.25, note: "NominalPlant's, floors/second^2. Unchanged from Elevator_System_2."}
+  Arrival_Tolerance: {type: REAL, value: 0.02, note: "floors. Used by BOTH plants' own arrival-snap logic, same numerical-implementation-detail reasoning as Elevator_System_2 -- no plain-English requirement behind it, not meant to have one."}
+  Velocity_Snap_Tolerance: {type: REAL, value: 0.01, note: "floors/second. Same as Arrival_Tolerance above -- used by both plants, no requirement behind it."}
+  Natural_Frequency: {type: REAL, value: 2.0, note: "ActualPlant's omega_n, rad/s. NOT the first value tried -- 8.0 was the original guess (fast enough that healthy tracking looked tight), but confirmed empirically that it was too fast in a different sense: even fully worn (Damping_Ratio at its floor), the resulting residual peaked around 0.006 floors/second, barely above healthy noise, because the system reabsorbed each disturbance before underdamping had time to build visible amplitude. 2.0 keeps healthy tracking reasonable while giving a worn system's ringing enough room to actually show up -- see description.md for the comparison that led here."}
+  Initial_Damping_Ratio: {type: REAL, value: 1.0, note: "ActualPlant starts critically damped -- the fastest possible response with no overshoot. A real elevator is deliberately engineered this way; nobody wants a car that bounces. This is the 'healthy' state wear degrades away from."}
+  Damping_Floor: {type: REAL, value: 0.15, note: "The lowest damping ratio wear can degrade to -- deliberately not 0. Zero damping is a qualitatively different failure mode (sustained oscillation that never settles) that isn't what this stage demonstrates; 0.15 is well into visibly underdamped (real overshoot and ringing) without ever losing stability."}
+  Wear_Rate: {type: REAL, value: 0.0015, note: "Damping ratio lost per second of Moving=True (usage-based, not calendar-time). Tuned so the car reaches Damping_Floor after roughly 45-50 one-way trips of continuous use -- long enough that early trips look completely healthy (matching a real slow-onset wear story), short enough to actually observe the full arc in a reasonable test run. See description.md for the measured trip-by-trip trace this was tuned against."}
+
+outputs:
+  Target_Floor: {type: REAL}
+  Any_Pending: {type: BOOL}
+  Any_Call_Above: {type: BOOL}
+  Any_Call_Below: {type: BOOL}
+  Going_Up: {type: BOOL}
+  Call_At_Current_Floor: {type: BOOL}
+  Just_Arrived_Level: {type: BOOL}
+  Just_Arrived: {type: BOOL}
+  Clock_Pulse: {type: BOOL}
+  Door_Elapsed: {type: REAL}
+  Door_Timer_Q: {type: BOOL}
+  Doors_Open: {type: BOOL}
+  Moving: {type: BOOL, note: "Now also the physics plant's run/hold command -- see note 2 above."}
+  Floor0_Request: {type: BOOL}
+  Floor1_Request: {type: BOOL}
+  Floor2_Request: {type: BOOL}
+  Floor3_Request: {type: BOOL}
+  Floor4_Request: {type: BOOL}
+  Floor5_Request: {type: BOOL}
+  Velocity_Residual: {type: REAL}
+  Abs_Velocity_Residual: {type: REAL}
+  CUSUM_High: {type: REAL}
+  CUSUM_Alarm: {type: BOOL}
+
+operations:
+  # --- Dispatch: which floor should the car be heading to right now ---
+
+  - name: "Any_Call_Above"
+    type: "or"
+    note: "True if any floor strictly above Current_Floor has a pending call. Only meaningful because Current_Floor is a runtime_input here -- see note 6 above."
+    expression:
+      or:
+        - {and: [{var: "Call_Floor1"}, {gt: [1, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor2"}, {gt: [2, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor3"}, {gt: [3, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor4"}, {gt: [4, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor5"}, {gt: [5, {var: "Current_Floor"}]}]}
+    output: "Any_Call_Above"
+
+  - name: "Any_Call_Below"
+    type: "or"
+    note: "Mirror of Any_Call_Above, for floors strictly below Current_Floor."
+    expression:
+      or:
+        - {and: [{var: "Call_Floor0"}, {lt: [0, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor1"}, {lt: [1, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor2"}, {lt: [2, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor3"}, {lt: [3, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor4"}, {lt: [4, {var: "Current_Floor"}]}]}
+    output: "Any_Call_Below"
+
+  - name: "Going_Up"
+    type: "RS"
+    note: |
+      The LOOK direction latch. Set switches to up, Reset switches to down.
+      Set and Reset conditions are mirror images and mutually exclusive by
+      construction (each requires the OTHER side to have nothing pending),
+      so RS's Reset-dominant tiebreak never actually has to arbitrate
+      between them. When BOTH sides have pending calls, neither condition
+      fires and the latch simply holds its current value -- "keep going the
+      way you're already going," which is exactly correct LOOK behavior:
+      continue in the current direction, only reverse once that direction
+      runs out of calls, even if calls exist on the other side the whole
+      time.
+    Set: [{and: [{"!": {var: "Any_Call_Below"}}, {var: "Any_Call_Above"}]}]
+    Reset: [{and: [{"!": {var: "Any_Call_Above"}}, {var: "Any_Call_Below"}]}]
+    output: "Going_Up"
+
+  - name: "Target_Floor"
+    type: "if"
+    note: |
+      Real LOOK dispatch (see note 6 above), not Elevator_System_1's
+      lowest-floor-wins order. Branches on Going_Up, then picks the
+      NEAREST active call in that direction relative to Current_Floor --
+      not the furthest (that would be plain SCAN, and would sail past
+      closer calls without stopping, since arrival detection below only
+      fires on an exact Current_Floor == Target_Floor match). The fallback
+      in both branches is Current_Floor itself, not a fixed floor -- an
+      idle car with nothing pending simply targets wherever it already is,
+      so Moving correctly reads False with no separate Any_Pending check
+      needed on it.
+    expression:
+      if:
+        - {var: "Going_Up"}
+        - if:
+            - {and: [{var: "Call_Floor1"}, {gt: [1, {var: "Current_Floor"}]}]}
+            - 1
+            - if:
+                - {and: [{var: "Call_Floor2"}, {gt: [2, {var: "Current_Floor"}]}]}
+                - 2
+                - if:
+                    - {and: [{var: "Call_Floor3"}, {gt: [3, {var: "Current_Floor"}]}]}
+                    - 3
+                    - if:
+                        - {and: [{var: "Call_Floor4"}, {gt: [4, {var: "Current_Floor"}]}]}
+                        - 4
+                        - if:
+                            - {and: [{var: "Call_Floor5"}, {gt: [5, {var: "Current_Floor"}]}]}
+                            - 5
+                            - {var: "Current_Floor"}
+        - if:
+            - {and: [{var: "Call_Floor0"}, {lt: [0, {var: "Current_Floor"}]}]}
+            - 0
+            - if:
+                - {and: [{var: "Call_Floor1"}, {lt: [1, {var: "Current_Floor"}]}]}
+                - 1
+                - if:
+                    - {and: [{var: "Call_Floor2"}, {lt: [2, {var: "Current_Floor"}]}]}
+                    - 2
+                    - if:
+                        - {and: [{var: "Call_Floor3"}, {lt: [3, {var: "Current_Floor"}]}]}
+                        - 3
+                        - if:
+                            - {and: [{var: "Call_Floor4"}, {lt: [4, {var: "Current_Floor"}]}]}
+                            - 4
+                            - {var: "Current_Floor"}
+    output: "Target_Floor"
+
+  - name: "Any_Pending"
+    type: "or"
+    expression:
+      or:
+        - {var: "Call_Floor0"}
+        - {var: "Call_Floor1"}
+        - {var: "Call_Floor2"}
+        - {var: "Call_Floor3"}
+        - {var: "Call_Floor4"}
+        - {var: "Call_Floor5"}
+    output: "Any_Pending"
+
+  # --- Movement command: the one signal that actually leaves the graph ---
+
+  - name: "Moving"
+    type: "and"
+    note: "Same expression as Elevator_System_1's Moving -- see note 2 above for why it's load-bearing now, not just a display indicator. Current_Floor is a runtime_input (plant-owned), so this still resolves to a plain tag lookup, no different syntactically from reading any other var."
+    expression:
+      and:
+        - {"!": {var: "Doors_Open"}}
+        - {"!": {eq: [{var: "Target_Floor"}, {var: "Current_Floor"}]}}
+    output: "Moving"
+
+  # --- Doors: opening, holding, and closing once the car arrives ---
+
+  - name: "Doors_Open"
+    type: "RS"
+    note: "Reset fires on either the normal hold timer OR the manual close-door button -- same wiring as Elevator_System_1."
+    Set: [{var: "Just_Arrived"}]
+    Reset: [{var: "Door_Timer_Q"}, {var: "Close_Door_Button"}]
+    output: "Doors_Open"
+
+  - name: "Just_Arrived"
+    type: "R_TRIG"
+    IN: {var: "Just_Arrived_Level"}
+    output: "Just_Arrived"
+
+  - name: "Call_At_Current_Floor"
+    type: "or"
+    note: |
+      Whether ANY pending call sits exactly at Current_Floor right now.
+      This exists because comparing Current_Floor to Target_Floor for
+      arrival detection is fragile under LOOK dispatch: the instant the
+      car reaches a floor, Any_Call_Above/Below immediately re-evaluate
+      using that new position, which can flip Going_Up and change
+      Target_Floor to the NEXT destination in the very same scan --
+      BEFORE arrival at the floor it just reached ever gets checked.
+      Confirmed behaviorally: without this, a car reaching floor 4 with
+      floor 1 also pending would see Target_Floor jump to 1 before
+      Just_Arrived_Condition ever saw Current_Floor == Target_Floor == 4,
+      so it would sail straight through 4 without stopping, and
+      Floor4_Request would never clear. Checking for a call AT the current
+      position, rather than a match against a value that can change out
+      from under the comparison in the same scan, is decoupled from
+      whatever Going_Up/Target_Floor do this scan -- it only depends on
+      Call_FloorN and Current_Floor directly.
+    expression:
+      or:
+        - {and: [{var: "Call_Floor0"}, {eq: [0, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor1"}, {eq: [1, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor2"}, {eq: [2, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor3"}, {eq: [3, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor4"}, {eq: [4, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor5"}, {eq: [5, {var: "Current_Floor"}]}]}
+    output: "Call_At_Current_Floor"
+
+  - name: "Just_Arrived_Condition"
+    type: "and"
+    note: "Just Call_At_Current_Floor directly -- it already implies a real pending call, so the old Any_Pending guard (needed back when this compared against Target_Floor's idle fallback) isn't needed either. Wrapped in a trivial and[] rather than aliased directly so the operation's own name stays Just_Arrived_Level for Just_Arrived's R_TRIG to read, unchanged from before."
+    expression:
+      and:
+        - {var: "Call_At_Current_Floor"}
+    output: "Just_Arrived_Level"
+
+  - name: "Door_Timer_Q"
+    type: "ge"
+    expression:
+      ge: [{var: "Door_Elapsed"}, {var: "Door_Hold_Time"}]
+    output: "Door_Timer_Q"
+
+  - name: "Door_Elapsed"
+    type: "CTUD"
+    note: "Counts whole seconds since the last arrival. Resets on a fresh arrival OR on an obstruction -- R is edge-triggered, so a long continuous obstruction only resets once at the moment it starts. Unchanged from Elevator_System_1."
+    CU: {var: "Clock_Pulse"}
+    CD: {var: "Never"}
+    R:
+      or:
+        - {var: "Just_Arrived"}
+        - {var: "Door_Obstruction"}
+    LD: {var: "Never"}
+    load_value: 0
+    PV: {var: "Door_Hold_Time"}
+    output: "Door_Elapsed"
+
+  - name: "Clock_Pulse"
+    type: "TON"
+    note: "Free-running 1-second pulse, self-referencing only. Unchanged from Elevator_System_1 -- including its known PT+1 steady-state timing quirk, see note 5 above."
+    IN: {"!": {var: "Clock_Pulse"}}
+    PT: {var: "One_Second"}
+    output: "Clock_Pulse"
+
+  # --- Requests: per-floor "still pending" bookkeeping, cleared once served ---
+  # Unchanged from Elevator_System_1.
+
+  - name: "Floor0_Request"
+    type: "RS"
+    note: "Remembered/pending indicator for floor 0, cleared once served. A pure sink -- nothing else reads this tag."
+    Set: [{var: "Call_Floor0"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 0]}]}]
+    output: "Floor0_Request"
+
+  - name: "Floor1_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor1"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 1]}]}]
+    output: "Floor1_Request"
+
+  - name: "Floor2_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor2"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 2]}]}]
+    output: "Floor2_Request"
+
+  - name: "Floor3_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor3"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 3]}]}]
+    output: "Floor3_Request"
+
+  - name: "Floor4_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor4"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 4]}]}]
+    output: "Floor4_Request"
+
+  - name: "Floor5_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor5"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 5]}]}]
+    output: "Floor5_Request"
+
+  # --- Monitoring: comparing actual physics against a nominal reference (CUSUM) ---
+  # New in this file -- see note 7 at the top. Everything above this point
+  # is Elevator_System_2 unmodified.
+
+  - name: "Velocity_Residual"
+    type: "-"
+    note: "Actual minus nominal, signed."
+    expression:
+      "-": [{var: "Velocity_FloorsPerSec"}, {var: "Nominal_Velocity_FloorsPerSec"}]
+    output: "Velocity_Residual"
+
+  - name: "Abs_Velocity_Residual"
+    type: "if"
+    note: |
+      abs(Velocity_Residual), built from "if" + "-" since this engine's
+      JsonLogic vocabulary has no abs primitive. This exists because a
+      signed, two-sided CUSUM (separate accumulators for "actual
+      persistently faster" and "actual persistently slower") turned out to
+      be the wrong tool for this stage's actual wear signature, confirmed
+      empirically: the worn plant's residual genuinely oscillates in sign
+      (negative during the first part of a transition, positive during the
+      next) rather than holding a consistent bias in one direction --
+      that's what damping-driven RINGING is, not a mean shift. A signed
+      two-sided CUSUM watches for a persistent shift in one direction;
+      fed a symmetric oscillation, its positive and negative excursions
+      partly cancel against each other rather than accumulating toward
+      either threshold. CUSUM on the residual's MAGNITUDE is the standard,
+      correct SPC tool for detecting growing variability/spread rather
+      than a shifted mean -- and growing oscillation amplitude around zero
+      is exactly wear's actual signature here.
+    expression:
+      if:
+        - gt: [{var: "Velocity_Residual"}, 0]
+        - {var: "Velocity_Residual"}
+        - {"-": [0, {var: "Velocity_Residual"}]}
+    output: "Abs_Velocity_Residual"
+
+  - name: "CUSUM_High"
+    type: "if"
+    note: |
+      One-sided CUSUM on |residual|: C = max(0, C_prev + |residual| - k).
+      Self-references its own output to accumulate across scans -- see
+      note 7 at the top for why this is safe (confirmed empirically, not
+      assumed) even though this is a stateless "if", not a function block.
+      Only one accumulator is needed now (not a High/Low pair) -- |residual|
+      is never negative, so there's only one direction to watch: growing.
+    expression:
+      if:
+        - gt: [{"-": [{"+": [{var: "CUSUM_High"}, {var: "Abs_Velocity_Residual"}]}, {var: "Slack_K"}]}, 0]
+        - {"-": [{"+": [{var: "CUSUM_High"}, {var: "Abs_Velocity_Residual"}]}, {var: "Slack_K"}]}
+        - 0
+    output: "CUSUM_High"
+
+  - name: "CUSUM_Alarm"
+    type: "gt"
+    note: "A pure sink, same as Moving and the Floor#_Request latches -- nothing reads this back into dispatch. It's the thing a simulation script or a future alerting layer would actually watch."
+    expression:
+      gt: [{var: "CUSUM_High"}, {var: "Threshold_H"}]
+    output: "CUSUM_Alarm"
