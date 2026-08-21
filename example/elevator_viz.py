@@ -1,0 +1,434 @@
+# elevator_viz.py
+#
+# Shared plotting/animation helpers for the elevator example. Deliberately
+# NOT engine-generic (it knows what a floor, a door, and a call button are)
+# -- but it IS stage-generic: everything here only ever reads tags out of
+# a history dict keyed by tag name, and treats a missing key as "this stage
+# doesn't have that" rather than an error. Concretely:
+#   - Elevator_System_1's history has an integer-valued Current_Floor and
+#     no Velocity_FloorsPerSec at all (no physics plant).
+#   - Elevator_System_2's history has a continuous Current_Floor and a real
+#     Velocity_FloorsPerSec.
+# The same shaft schematic and playback code work for both, unmodified --
+# that split is the whole point of building this once, here, instead of
+# once per stage.
+#
+# animate_elevator(), render_static_frame(), and show_live() are purely
+# passive: they take an already-finished history dict and display it, with
+# no dependency on engine/ at all. run_interactive() is different -- it
+# actually drives the simulation forward itself (imports run_scan from
+# scan_cycle below), one scan per real timer tick, in response to floor and
+# close-door buttons being clicked live. That's a real, deliberate coupling
+# to the engine layer that the other three functions don't have -- a
+# caller using run_interactive() needs engine/ on sys.path, the same way
+# run_simulation.py already puts it there before importing this file.
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle, Circle
+from matplotlib.animation import FuncAnimation
+from matplotlib.widgets import Slider, Button
+from scan_cycle import run_scan
+from scan_cycle import run_scan
+
+CAR_COLOR_CLOSED = "#4C72B0"
+CAR_COLOR_OPEN = "#8CA6D6"
+CALL_LIT = "#D62728"
+CALL_UNLIT = "#BBBBBB"
+FLOOR_LINE = "#888888"
+
+
+def _floor_labels(top_floor, floor_labels=None):
+    if floor_labels is not None:
+        return floor_labels
+    return ["G"] + [str(i) for i in range(1, int(top_floor) + 1)]
+
+
+def _has_velocity(history):
+    return "Velocity_FloorsPerSec" in history and len(history["Velocity_FloorsPerSec"]) > 0
+
+
+def draw_shaft(ax, position, doors_open, calls_lit, top_floor, floor_labels=None):
+    """
+    Draws the shaft schematic at a single instant into an already-cleared
+    Axes: floor lines, the car at `position` (any float in [0, top_floor],
+    not just an integer -- this is what lets Elevator_System_2's continuous
+    position show mid-flight, not just snap between floors), and one call
+    light per floor.
+
+    position    -- Current_Floor's value at this instant (int or float).
+    doors_open  -- bool, this instant's Doors_Open.
+    calls_lit   -- sequence of bool, one per floor (0 = ground), True means
+                   that floor's call light is on. Caller decides what "lit"
+                   means -- raw Call_FloorN (only true while physically
+                   held) or Floor#_Request (true until served, the way a
+                   real call button light actually behaves) both work here
+                   the same way; this function just draws whatever it's given.
+    top_floor   -- highest floor number.
+    """
+    labels = _floor_labels(top_floor, floor_labels)
+    ax.set_xlim(0, 1.6)
+    ax.set_ylim(-0.6, top_floor + 0.6)
+    ax.set_xticks([])
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.set_title("Shaft")
+
+    for floor_num in range(len(labels)):
+        ax.axhline(floor_num, color=FLOOR_LINE, linewidth=1, linestyle="--", zorder=0)
+
+    for floor_num, lit in enumerate(calls_lit):
+        ax.add_patch(Circle((1.4, floor_num), 0.08,
+                             color=CALL_LIT if lit else CALL_UNLIT, zorder=2))
+
+    car_half_height = 0.32
+    car_color = CAR_COLOR_OPEN if doors_open else CAR_COLOR_CLOSED
+    ax.add_patch(Rectangle((0.15, position - car_half_height), 1.0, 2 * car_half_height,
+                            facecolor=car_color, edgecolor="black", linewidth=1.2, zorder=1))
+
+    if doors_open:
+        # A visible gap in the car, rather than just a color change -- the
+        # color alone doesn't read as "open" at a glance, especially in a
+        # single static frame with no animation to imply motion.
+        gap_width = 0.12
+        ax.add_patch(Rectangle((0.15 + 0.5 - gap_width / 2, position - car_half_height),
+                                gap_width, 2 * car_half_height,
+                                facecolor="white", edgecolor="black", linewidth=0.8, zorder=2))
+
+
+def draw_timeseries(ax_position, history, up_to_t, ax_velocity=None):
+    """
+    Draws the time-series panel(s) up through index up_to_t (inclusive),
+    with a vertical marker at the current frame. Cropping to up_to_t is
+    what lets this same function serve both a single static plot (pass
+    len(history["t"]) - 1) and a live-updating animation frame (pass the
+    current frame index).
+
+    ax_velocity is optional -- pass it (and a history that actually has
+    Velocity_FloorsPerSec) for Elevator_System_2; omit it for
+    Elevator_System_1, where there's no velocity to show at all, not just
+    a hidden/empty panel.
+    """
+    t = history["t"][:up_to_t + 1]
+    position = history["Current_Floor"][:up_to_t + 1]
+
+    ax_position.plot(t, position, color=CAR_COLOR_CLOSED, linewidth=1.6)
+    ax_position.axvline(t[-1], color="black", linewidth=0.8, alpha=0.5)
+    ax_position.set_ylabel("Current_Floor")
+    ax_position.set_title("Position over time")
+
+    if ax_velocity is not None and _has_velocity(history):
+        velocity = history["Velocity_FloorsPerSec"][:up_to_t + 1]
+        ax_velocity.plot(t, velocity, color="#C44E52", linewidth=1.6)
+        ax_velocity.axvline(t[-1], color="black", linewidth=0.8, alpha=0.5)
+        ax_velocity.set_ylabel("Velocity_FloorsPerSec")
+        ax_velocity.set_xlabel("scan (t)")
+        ax_velocity.set_title("Velocity over time")
+    else:
+        ax_position.set_xlabel("scan (t)")
+
+
+def _calls_at(history, t, call_keys):
+    return [bool(history[key][t]) for key in call_keys if key in history]
+
+
+def _format_command_actual(history, t):
+    # The visible proof of the commanded/actual split described in
+    # Elevator_System_2's description.md: Moving is what the logic
+    # COMMANDS, Velocity_FloorsPerSec is what the physics plant ACTUALLY
+    # produces. They always agree today -- the plant is perfectly obedient
+    # -- but showing them as two separately-sourced numbers, side by side,
+    # makes that independence visible now, before Elevator_System_3 ever
+    # gives them a reason to disagree.
+    #
+    # Elevator_System_1's history has Moving but no Velocity_FloorsPerSec
+    # at all -- there is no independently-produced "actual" signal to show,
+    # because Current_Floor there IS the command (a CTUD counter the logic
+    # drives itself). Saying so explicitly, rather than just omitting the
+    # second half of the line, is the point: the absence itself is the
+    # thing worth seeing.
+    if "Moving" not in history:
+        return ""
+    commanded = f"Commanded (Moving): {bool(history['Moving'][t])}"
+    if _has_velocity(history):
+        actual = f"Actual (Velocity): {history['Velocity_FloorsPerSec'][t]:+.2f} floors/sec"
+    else:
+        actual = "Actual: no independent signal exists in this stage"
+    return f"{commanded}    |    {actual}"
+
+
+def _build_axes(has_velocity, figsize_scale=1.0):
+    # Shared by animate_elevator(), render_static_frame(), and show_live()
+    # -- all three want the identical shaft+timeseries(+velocity) layout,
+    # differing only in what drives the frame index (a FuncAnimation timer,
+    # a single fixed t, or a user-controlled slider).
+    if has_velocity:
+        fig, (ax_shaft, ax_pos, ax_vel) = plt.subplots(
+            1, 3, figsize=(11, 5 * figsize_scale), gridspec_kw={"width_ratios": [1, 1.4, 1.4]})
+    else:
+        fig, (ax_shaft, ax_pos) = plt.subplots(
+            1, 2, figsize=(8, 5 * figsize_scale), gridspec_kw={"width_ratios": [1, 1.6]})
+        ax_vel = None
+
+    # One fig-level Text object for the commanded/actual readout, created
+    # once and updated via set_text() every frame -- it lives above all
+    # three axes (figure-fraction coordinates, not tied to any Axes), so
+    # ax.cla() calls in _render_frame never touch it.
+    readout_text = fig.text(0.5, 0.92, "", ha="center", va="top", fontsize=10, family="monospace")
+    return fig, ax_shaft, ax_pos, ax_vel, readout_text
+
+
+def _render_frame(ax_shaft, ax_pos, ax_vel, readout_text, history, t, top_floor, call_keys, floor_labels):
+    # The one place that actually draws a single instant -- clears and
+    # redraws all axes for index t. Every caller in this file that shows a
+    # frame (whether once, on a timer, or on a slider drag) goes through
+    # this exact function, so the shaft schematic and the FuncAnimation
+    # playback and the interactive scrubber can never visually drift apart
+    # from each other.
+    ax_shaft.cla()
+    ax_pos.cla()
+    if ax_vel is not None:
+        ax_vel.cla()
+
+    position = history["Current_Floor"][t]
+    doors_open = bool(history["Doors_Open"][t]) if "Doors_Open" in history else False
+    calls_lit = _calls_at(history, t, call_keys)
+
+    draw_shaft(ax_shaft, position, doors_open, calls_lit, top_floor, floor_labels)
+    draw_timeseries(ax_pos, history, t, ax_velocity=ax_vel)
+
+    if readout_text is not None:
+        readout_text.set_text(_format_command_actual(history, t))
+
+
+def animate_elevator(history, top_floor, call_keys=("Floor0_Request", "Floor1_Request", "Floor2_Request", "Floor3_Request", "Floor4_Request", "Floor5_Request"),
+                      title="", interval_ms=150, floor_labels=None):
+    """
+    Builds a forward-only, non-interactive animation over the full history
+    and returns (fig, anim) -- useful for saving a gif/mp4 (anim.save(path))
+    rather than an interactive session. For actually looking at a run
+    (scrub back and forth, pause, replay), use show_live() instead -- this
+    function is kept for the export use case, not the day-to-day one.
+
+    call_keys defaults to the Floor#_Request latches (lit until served),
+    not the raw Call_FloorN buttons (lit only while held) -- that matches
+    how a real elevator call button's light actually behaves, and both
+    Elevator_System_1 and Elevator_System_2 already produce these tags
+    unchanged from each other.
+    """
+    has_vel = _has_velocity(history)
+    fig, ax_shaft, ax_pos, ax_vel, readout_text = _build_axes(has_vel)
+    fig.suptitle(title)
+
+    def frame(t):
+        _render_frame(ax_shaft, ax_pos, ax_vel, readout_text, history, t, top_floor, call_keys, floor_labels)
+        fig.tight_layout(rect=[0, 0, 1, 0.86])
+
+    anim = FuncAnimation(fig, frame, frames=len(history["t"]), interval=interval_ms, repeat=False)
+    return fig, anim
+
+
+def render_static_frame(history, t, top_floor, call_keys=("Floor0_Request", "Floor1_Request", "Floor2_Request", "Floor3_Request", "Floor4_Request", "Floor5_Request"),
+                         title="", floor_labels=None):
+    """
+    Same visual as one animation frame, without building a FuncAnimation --
+    useful for a single snapshot (a README screenshot, a quick sanity
+    check) rather than the full playback.
+    """
+    has_vel = _has_velocity(history)
+    fig, ax_shaft, ax_pos, ax_vel, readout_text = _build_axes(has_vel)
+    fig.suptitle(title)
+
+    _render_frame(ax_shaft, ax_pos, ax_vel, readout_text, history, t, top_floor, call_keys, floor_labels)
+    fig.tight_layout(rect=[0, 0, 1, 0.86])
+    return fig
+
+
+def run_interactive(operations, fb_instances, tags, top_floor, plant=None,
+                     floor_labels=None, title="", scan_interval_ms=500,
+                     call_floor_prefix="Call_Floor", request_prefix="Floor",
+                     request_suffix="_Request", close_door_key="Close_Door_Button"):
+    """
+    Drives a live, real-time simulation the person actually controls --
+    click a floor to call the car there, click Close Door to shortcut the
+    hold. There is no precomputed history and no scripted scenario_fn:
+    every scan is run for the first time the instant it happens, on a
+    real timer, the same way a real PLC's scan cycle runs continuously
+    against whatever the world is doing right now. This is the
+    interactive replacement for a scenario -- run_simulation.py's job
+    shrinks to just setup (which YAML, which plant), because there's no
+    scripted sequence of events left to write.
+
+    operations, fb_instances, tags -- straight from
+        engine/simulation_runner.setup_simulation(yaml_path), not yet run.
+    top_floor  -- highest floor number; drives both the shaft's y-axis and
+        how many floor-call buttons get drawn (0..top_floor).
+    plant      -- optional physics plant; same role as in run_scan_loop().
+
+    One real subtlety this function handles, not the YAML: dispatch in
+    both elevator_N.yaml files reads the raw Call_FloorN button directly,
+    not a remembered latch (documented in Elevator_System_1's note 1) --
+    a call has to still be held by the time the car is free to serve it.
+    A single momentary click would frequently get missed. Rather than
+    change that documented logic design, this function holds each clicked
+    floor's Call_FloorN true internally -- exactly emulating a person
+    physically holding the button -- until Floor{N}_Request (which
+    already exists, and already means "served or not") goes false again.
+    From the logic's point of view nothing changed; from the person
+    clicking, it behaves like a normal elevator button that stays lit
+    until served.
+    """
+    top_floor_int = int(top_floor)
+    num_floors = top_floor_int + 1
+    call_keys = tuple(f"{request_prefix}{n}{request_suffix}" for n in range(num_floors))
+    labels = _floor_labels(top_floor_int, floor_labels)
+
+    has_vel = "Velocity_FloorsPerSec" in tags
+    fig, ax_shaft, ax_pos, ax_vel, readout_text = _build_axes(has_vel, figsize_scale=1.15)
+    fig.suptitle(title)
+    plt.subplots_adjust(bottom=0.34, top=0.84)
+
+    tracked_keys = list(tags.keys())
+    history = {"t": []}
+    for key in tracked_keys:
+        history[key] = []
+
+    ui_state = {"running": True, "pending_calls": set(), "close_door_armed": False}
+
+    def record_and_render():
+        t = len(history["t"])
+        history["t"].append(t)
+        for key in tracked_keys:
+            history[key].append(tags.get(key))
+        _render_frame(ax_shaft, ax_pos, ax_vel, readout_text, history, t, top_floor_int, call_keys, floor_labels)
+        fig.canvas.draw_idle()
+
+    record_and_render()  # frame 0: the initial, pre-scan state
+
+    def tick():
+        if not ui_state["running"]:
+            return
+
+        for n in range(num_floors):
+            tags[f"{call_floor_prefix}{n}"] = n in ui_state["pending_calls"]
+        tags[close_door_key] = ui_state["close_door_armed"]
+        ui_state["close_door_armed"] = False  # momentary -- true for exactly this one scan
+
+        run_scan(operations, fb_instances, tags)
+        if plant is not None:
+            plant.step(tags)
+
+        # A held call is released once its floor's request has actually
+        # been served -- not on click, and not just because the raw button
+        # happened to read false this instant (see the docstring above).
+        served = {n for n in ui_state["pending_calls"] if not tags.get(f"{request_prefix}{n}{request_suffix}", False)}
+        ui_state["pending_calls"].difference_update(served)
+
+        record_and_render()
+
+    # --- Floor-call buttons, one per floor, laid out along the bottom ---
+    floor_buttons = []
+
+    def make_floor_handler(n):
+        def handler(event):
+            ui_state["pending_calls"].add(n)
+        return handler
+
+    button_width = min(0.9 / num_floors, 0.12)
+    gap = 0.01
+    start_x = 0.5 - (num_floors * button_width + (num_floors - 1) * gap) / 2
+    for n in range(num_floors):
+        ax_btn = fig.add_axes([start_x + n * (button_width + gap), 0.20, button_width, 0.06])
+        btn = Button(ax_btn, labels[n])
+        btn.on_clicked(make_floor_handler(n))
+        floor_buttons.append(btn)  # keep references alive -- matplotlib drops handlers otherwise
+
+    # --- Close-door and Play/Pause, on their own row below the floor buttons ---
+    def on_close_door_clicked(event):
+        ui_state["close_door_armed"] = True
+
+    ax_close = fig.add_axes([0.30, 0.10, 0.18, 0.06])
+    close_button = Button(ax_close, "Close door")
+    close_button.on_clicked(on_close_door_clicked)
+
+    def on_play_clicked(event):
+        ui_state["running"] = not ui_state["running"]
+        play_button.label.set_text("Pause" if ui_state["running"] else "Resume")
+    ax_play = fig.add_axes([0.52, 0.10, 0.18, 0.06])
+    play_button = Button(ax_play, "Pause")
+
+    play_button.on_clicked(on_play_clicked)
+
+    timer = fig.canvas.new_timer(interval=scan_interval_ms)
+    timer.add_callback(tick)
+    timer.start()
+
+    plt.show()
+
+
+def show_live(history, top_floor, call_keys=("Floor0_Request", "Floor1_Request", "Floor2_Request", "Floor3_Request", "Floor4_Request", "Floor5_Request"),
+              title="", floor_labels=None, interval_ms=150):
+    """
+    Opens an interactive, scrubbable player over one simulation's history:
+    a draggable slider covering every scan plus a Play/Pause button. This
+    is the "engine" half of the split -- run_simulation.py's only job is
+    to produce a history dict and call this once; everything about HOW
+    that result is displayed and navigated (forward, backward, paused,
+    mid-scrub) lives here, not scattered across every stage's own script.
+
+    Calls plt.show() itself and blocks until the window is closed -- a
+    caller doesn't do anything with a return value, the same way a caller
+    doesn't manually drive a FuncAnimation's frames.
+    """
+    has_vel = _has_velocity(history)
+    fig, ax_shaft, ax_pos, ax_vel, readout_text = _build_axes(has_vel, figsize_scale=1.1)
+    fig.suptitle(title)
+    plt.subplots_adjust(bottom=0.22, top=0.84)
+
+    num_frames = len(history["t"])
+    state = {"frame": 0, "playing": False, "programmatic_update": False}
+
+    def render(t):
+        _render_frame(ax_shaft, ax_pos, ax_vel, readout_text, history, t, top_floor, call_keys, floor_labels)
+        fig.canvas.draw_idle()
+
+    render(0)
+
+    ax_slider = fig.add_axes([0.15, 0.08, 0.55, 0.05])
+    slider = Slider(ax_slider, "scan", 0, num_frames - 1, valinit=0, valstep=1)
+
+    ax_play = fig.add_axes([0.74, 0.075, 0.10, 0.06])
+    play_button = Button(ax_play, "Play")
+
+    def on_slider_changed(val):
+        state["frame"] = int(val)
+        if not state["programmatic_update"]:
+            # A real drag from the user, not the auto-advance timer below
+            # moving the handle itself -- pause playback so it doesn't
+            # immediately fight the position the user just chose.
+            state["playing"] = False
+            play_button.label.set_text("Play")
+        render(state["frame"])
+    slider.on_changed(on_slider_changed)
+
+    def on_play_clicked(event):
+        state["playing"] = not state["playing"]
+        play_button.label.set_text("Pause" if state["playing"] else "Play")
+    play_button.on_clicked(on_play_clicked)
+
+    def advance():
+        if not state["playing"]:
+            return
+        next_frame = (state["frame"] + 1) % num_frames
+        # Move the slider programmatically, going through the same
+        # on_slider_changed path a manual drag would -- one render path
+        # for both, instead of a second copy of the render call here that
+        # could quietly drift out of sync with the drag path over time.
+        state["programmatic_update"] = True
+        slider.set_val(next_frame)
+        state["programmatic_update"] = False
+
+    timer = fig.canvas.new_timer(interval=interval_ms)
+    timer.add_callback(advance)
+    timer.start()
+
+    plt.show()

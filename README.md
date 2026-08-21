@@ -4,13 +4,11 @@ Describe a control system in plain language and get a working, simulatable rule 
 
 ## Why I built this
 
-During an internship working with real industrial control logic, I found that understanding a system conceptually was rarely the hard part. The challenge was everything between that understanding and a working simulation: dense technical documentation, customer- and vendor-specific tools, and a PLC programming language I had no prior experience with.
+Iterating on a system starts as a hypothesis, not a certainty. What actually moves it forward is information, not more ideas — you usually already have the idea; what's expensive is finding out, cheaply and quickly, whether it holds up against reality. That's exactly why simulation and instrumentation matter so much in industrial process work: they're the fastest route to that information without touching the real thing.
 
-Getting from *“I understand this system”* to *“I can run and test this system”* meant first becoming fluent in all of that before writing a single useful line of logic.
+During an internship working with real industrial control logic, I ran into that gap directly. Understanding the system — conceptually, logically, physically — was rarely the hard part; I usually had a clear picture of what was going on and ideas for how to improve it. The bottleneck was everything *between* that understanding and information I could actually test against: dense technical documentation, a simulation workflow bound by strict PLC-specific rules and vendor tooling, and an outcome that was rigid by construction, mostly pure logic with little room to represent anything else. Even with the right idea already in hand, there was still a wide gap between understanding a system and being able to cheaply find out whether that idea actually worked.
 
-And even after clearing that hurdle, most logic simulators assume the resulting system is rigid: fixed structure, fixed behaviour, logic and nothing else. That becomes a limitation as soon as you want to go beyond pure logic — for example, replacing a sensor with a physics model, adding a new rule, or eventually integrating something like ML.
-
-`describe2plc` is the tool I built to remove both barriers.
+`describe2plc` is the tool I built to close that gap — to let domain knowledge translate directly into testable information, without first requiring fluency in a dense, PLC-specific toolchain.
 
 ## How it works
 
@@ -22,6 +20,8 @@ The goal isn't simply to *“translate English into PLC logic.”* By representi
 
 You can swap a physics model in where a sensor used to be, add a new rule without restructuring the rest of the system, or iterate on the design without assuming that the underlying structure has to be fixed from the beginning.
 
+That modularity isn't just an architectural nicety — it's the actual point. A better simulation is more information, and more information is what turns the next idea into something you can test, not just something you can reason about. A placeholder becoming a real physics plant, a physics plant later feeding a monitoring layer, a monitoring layer eventually informed by something like ML — each of those is capability added on top of the same graph, not a rebuild, so the ceiling on how much information you can get out of the system keeps moving as you iterate.
+
 ## Status
 
 Early stage. The core engine — dependency-graph parsing, topological sorting, and scan-cycle evaluation — is working.
@@ -31,9 +31,3 @@ A worked toy example, the full translation-rules guide, and setup instructions a
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-s
-s
-
-s
-sssssssss

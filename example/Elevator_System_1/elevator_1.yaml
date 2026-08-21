@@ -2,9 +2,21 @@
 # See examples/elevator/Elevator_System_1/description.md for the plain-English
 # version this was translated from.
 #
-# Floors are numbered 0 (ground), 1, 2. Motion between floors is a placeholder:
-# a fixed Travel_Time_Per_Floor per floor crossed, not real physics -- that's
-# exactly what Elevator_System_2 replaces.
+# Floors are numbered 0 (ground) through 5 -- six floors, not the original
+# three. Widened deliberately: with only two floors of travel room, a real
+# trapezoidal motion profile (Elevator_System_2) barely has distance to
+# reach cruise speed before it has to start braking again, so the
+# accel/cruise/decel shape this project is actually trying to demonstrate
+# was hard to see. More floors gives the physics room to show a real
+# cruise plateau on a multi-floor trip. Motion between floors here is still
+# a placeholder: a fixed Travel_Time_Per_Floor per floor crossed, not real
+# physics -- that's exactly what Elevator_System_2 replaces.
+#
+# Also added: Close_Door_Button, a manual override that can close the doors
+# before Door_Hold_Time elapses -- the same interlock a real elevator door-
+# close button provides. Wired into Doors_Open's Reset list (see below),
+# which already supports multiple OR'd conditions natively -- this needed
+# no new engine capability, just one more list entry.
 #
 # Two structural notes worth reading before extending this file (both are
 # consequences of how this engine works, not bugs in the elevator logic
@@ -49,12 +61,16 @@ runtime_inputs:
   Call_Floor0: {type: BOOL}
   Call_Floor1: {type: BOOL}
   Call_Floor2: {type: BOOL}
+  Call_Floor3: {type: BOOL}
+  Call_Floor4: {type: BOOL}
+  Call_Floor5: {type: BOOL}
   Door_Obstruction: {type: BOOL}
+  Close_Door_Button: {type: BOOL, note: "Momentary, not a toggle -- a caller should set this True for exactly one scan per press, then clear it back to False, the same way a real pushbutton behaves. Doors_Open's RS is Reset-dominant, so if this were left True continuously, doors could never open again on a future arrival."}
 
 hmi_configuration:
   Travel_Time_Per_Floor: {type: REAL, default: 4}
   Door_Hold_Time: {type: REAL, default: 6}
-  Top_Floor: {type: REAL, default: 2}
+  Top_Floor: {type: REAL, default: 5}
   Never: {type: BOOL, default: false}
   One_Second: {type: REAL, default: 1}
 
@@ -73,13 +89,16 @@ outputs:
   Floor0_Request: {type: BOOL}
   Floor1_Request: {type: BOOL}
   Floor2_Request: {type: BOOL}
+  Floor3_Request: {type: BOOL}
+  Floor4_Request: {type: BOOL}
+  Floor5_Request: {type: BOOL}
 
 operations:
   # --- Dispatch: which floor should the car be heading to right now ---
 
   - name: "Target_Floor"
     type: "if"
-    note: "Priority order when more than one call is active: ground first, then 1st, then 2nd. Reads the raw buttons, not the latches below -- see note 1 above."
+    note: "Priority order when more than one call is active: ground first, then ascending. Reads the raw buttons, not the latches below -- see note 1 above."
     expression:
       if:
         - {var: "Call_Floor0"}
@@ -90,7 +109,16 @@ operations:
             - if:
                 - {var: "Call_Floor2"}
                 - 2
-                - 0
+                - if:
+                    - {var: "Call_Floor3"}
+                    - 3
+                    - if:
+                        - {var: "Call_Floor4"}
+                        - 4
+                        - if:
+                            - {var: "Call_Floor5"}
+                            - 5
+                            - 0
     output: "Target_Floor"
 
   - name: "Any_Pending"
@@ -100,6 +128,9 @@ operations:
         - {var: "Call_Floor0"}
         - {var: "Call_Floor1"}
         - {var: "Call_Floor2"}
+        - {var: "Call_Floor3"}
+        - {var: "Call_Floor4"}
+        - {var: "Call_Floor5"}
     output: "Any_Pending"
 
   # --- Movement: turning "where should I go" into an actual position ---
@@ -144,8 +175,9 @@ operations:
 
   - name: "Doors_Open"
     type: "RS"
+    note: "Reset fires on either the normal hold timer OR the manual close-door button -- RS's Reset field already supports multiple OR'd conditions natively, so this needed no new engine capability."
     Set: [{var: "Just_Arrived"}]
-    Reset: [{var: "Door_Timer_Q"}]
+    Reset: [{var: "Door_Timer_Q"}, {var: "Close_Door_Button"}]
     output: "Doors_Open"
 
   - name: "Just_Arrived"
@@ -209,3 +241,21 @@ operations:
     Set: [{var: "Call_Floor2"}]
     Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 2]}]}]
     output: "Floor2_Request"
+
+  - name: "Floor3_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor3"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 3]}]}]
+    output: "Floor3_Request"
+
+  - name: "Floor4_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor4"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 4]}]}]
+    output: "Floor4_Request"
+
+  - name: "Floor5_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor5"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 5]}]}]
+    output: "Floor5_Request"

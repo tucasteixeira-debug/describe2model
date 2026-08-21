@@ -2,7 +2,15 @@
 # See examples/elevator/Elevator_System_2/description.md for the plain-English
 # problem statement this was translated from.
 #
-# Floors are numbered 0 (ground), 1, 2, same as Elevator_System_1.
+# Floors are numbered 0 (ground) through 5 -- six floors, matching
+# Elevator_System_1's own widening. Widened for the same reason there: two
+# floors of travel room barely lets the trapezoidal profile reach cruise
+# speed before it has to brake again, which made System_2's whole point
+# (real accel/cruise/decel, not just "not instant") hard to actually see.
+# A multi-floor trip now has room for a real cruise plateau.
+#
+# Also added: Close_Door_Button, the same manual door-close override added
+# to Elevator_System_1 -- wired identically, into Doors_Open's Reset list.
 #
 # Structural notes worth reading before extending this file:
 #
@@ -33,6 +41,16 @@
 #    real authority outside the graph. Deliberately reused rather than
 #    duplicated into a separate "Command_Run" tag -- it was already exactly
 #    the right signal, just never wired to anything that could act on it.
+#    This is also the tag worth reading alongside Velocity_FloorsPerSec if
+#    you want to see the commanded-vs-actual split directly: Moving is what
+#    the logic commands, Velocity_FloorsPerSec is what the plant actually
+#    produces. They always agree today -- the plant is perfectly obedient
+#    -- but they are genuinely two different signals, which Elevator_System_1
+#    structurally could not represent at all (Current_Floor there was the
+#    command and the result, simultaneously, because one CTUD counter was
+#    both). That split is the actual precondition Elevator_System_3's CUSUM
+#    layer needs to exist -- detecting drift requires two independently-
+#    produced values to compare, not one.
 #
 # 3. This closes a real gap from Elevator_System_1 (its note 2): a second
 #    call arriving while doors are open could preempt Target_Floor mid-dwell
@@ -57,12 +75,41 @@
 #    known PT+1 steady-state timing quirk documented for Elevator_System_1
 #    (see docs/architecture.md's "Known limitation" section) -- untouched,
 #    not revisited here.
+#
+# 6. Target_Floor is NOT the same as Elevator_System_1's anymore. That
+#    version always picked the lowest-numbered pending call, recomputed
+#    from scratch every scan -- not what any real elevator does (confirmed
+#    by research, not assumed: real single-car dispatch is "Selective
+#    Collective" control, better known as the LOOK algorithm -- keep going
+#    in the current direction, serving every call you pass, and only
+#    reverse once nothing is left ahead of you in that direction). This
+#    file now implements real LOOK dispatch: a Going_Up direction latch,
+#    driven by whether there's anything left to serve above or below the
+#    car right now, and Target_Floor picks the nearest active call in
+#    whichever direction Going_Up currently points.
+#
+#    This is possible here specifically BECAUSE Current_Floor is a
+#    runtime_input, not an operation. LOOK dispatch fundamentally needs to
+#    compare pending calls against the car's OWN CURRENT POSITION -- that's
+#    what "nearest call ahead of me" even means. Elevator_System_1 cannot
+#    do this: Target_Floor reading Current_Floor there would create a real
+#    cross-operation cycle (Current_Floor's own CU/CD already reads
+#    Target_Floor), confirmed empirically -- graph_builder raises a genuine
+#    CycleError the moment Target_Floor is given a Current_Floor reference
+#    while Current_Floor is still a CTUD op. Not a rule that was worked
+#    around here -- a structural consequence of the same logic-owns-
+#    position problem description.md's whole framing is about. Real LOOK
+#    dispatch was never available until position left the graph.
 
 runtime_inputs:
   Call_Floor0: {type: BOOL}
   Call_Floor1: {type: BOOL}
   Call_Floor2: {type: BOOL}
+  Call_Floor3: {type: BOOL}
+  Call_Floor4: {type: BOOL}
+  Call_Floor5: {type: BOOL}
   Door_Obstruction: {type: BOOL}
+  Close_Door_Button: {type: BOOL, note: "Momentary, not a toggle -- see Elevator_System_1's identical note. A caller sets this True for exactly one scan per press, then clears it."}
   Current_Floor: {type: REAL, note: "Written every scan by the physics plant, not an operation -- see note 1 above. Starts at 0.0, same as any other unset runtime input."}
   Velocity_FloorsPerSec: {type: REAL, note: "Also plant-owned. Not read by any operation right now -- exposed purely for observability (simulation script, future monitoring stage), same reasoning the reference plant class used for its own diagnostic terms."}
 
@@ -79,7 +126,7 @@ hmi_configuration:
 # other tunable constant in the YAML: one source of truth, not a number
 # quietly duplicated between this file and car_physics.py.
 physical_constants:
-  Top_Floor: {type: REAL, value: 2, note: "Upper position bound. Moved here from Elevator_System_1's hmi_configuration -- nothing in the operations graph reads it anymore now that Current_Floor isn't a CTUD."}
+  Top_Floor: {type: REAL, value: 5, note: "Upper position bound. Moved here from Elevator_System_1's hmi_configuration -- nothing in the operations graph reads it anymore now that Current_Floor isn't a CTUD."}
   Max_Velocity: {type: REAL, value: 0.5, note: "floors/second. Per description.md's stated requirement: crossing one floor at cruise speed should take ~2 seconds -- 1 floor / 2s = 0.5. Not an arbitrary Python default; the requirement is stated, this value is just its arithmetic."}
   Acceleration: {type: REAL, value: 0.25, note: "floors/second^2. Per description.md: reach Max_Velocity from a stop in ~2 seconds -- 0.5 / 2s = 0.25."}
   Deceleration: {type: REAL, value: 0.25, note: "floors/second^2. Per description.md: symmetric with Acceleration -- brake from Max_Velocity to a stop over the same ~2 seconds. Equal to Acceleration by requirement here, not by engine assumption -- see car_physics.py, nothing treats the two as linked."}
@@ -89,6 +136,10 @@ physical_constants:
 outputs:
   Target_Floor: {type: REAL}
   Any_Pending: {type: BOOL}
+  Any_Call_Above: {type: BOOL}
+  Any_Call_Below: {type: BOOL}
+  Going_Up: {type: BOOL}
+  Call_At_Current_Floor: {type: BOOL}
   Just_Arrived_Level: {type: BOOL}
   Just_Arrived: {type: BOOL}
   Clock_Pulse: {type: BOOL}
@@ -99,24 +150,102 @@ outputs:
   Floor0_Request: {type: BOOL}
   Floor1_Request: {type: BOOL}
   Floor2_Request: {type: BOOL}
+  Floor3_Request: {type: BOOL}
+  Floor4_Request: {type: BOOL}
+  Floor5_Request: {type: BOOL}
 
 operations:
   # --- Dispatch: which floor should the car be heading to right now ---
 
+  - name: "Any_Call_Above"
+    type: "or"
+    note: "True if any floor strictly above Current_Floor has a pending call. Only meaningful because Current_Floor is a runtime_input here -- see note 6 above."
+    expression:
+      or:
+        - {and: [{var: "Call_Floor1"}, {gt: [1, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor2"}, {gt: [2, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor3"}, {gt: [3, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor4"}, {gt: [4, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor5"}, {gt: [5, {var: "Current_Floor"}]}]}
+    output: "Any_Call_Above"
+
+  - name: "Any_Call_Below"
+    type: "or"
+    note: "Mirror of Any_Call_Above, for floors strictly below Current_Floor."
+    expression:
+      or:
+        - {and: [{var: "Call_Floor0"}, {lt: [0, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor1"}, {lt: [1, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor2"}, {lt: [2, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor3"}, {lt: [3, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor4"}, {lt: [4, {var: "Current_Floor"}]}]}
+    output: "Any_Call_Below"
+
+  - name: "Going_Up"
+    type: "RS"
+    note: |
+      The LOOK direction latch. Set switches to up, Reset switches to down.
+      Set and Reset conditions are mirror images and mutually exclusive by
+      construction (each requires the OTHER side to have nothing pending),
+      so RS's Reset-dominant tiebreak never actually has to arbitrate
+      between them. When BOTH sides have pending calls, neither condition
+      fires and the latch simply holds its current value -- "keep going the
+      way you're already going," which is exactly correct LOOK behavior:
+      continue in the current direction, only reverse once that direction
+      runs out of calls, even if calls exist on the other side the whole
+      time.
+    Set: [{and: [{"!": {var: "Any_Call_Below"}}, {var: "Any_Call_Above"}]}]
+    Reset: [{and: [{"!": {var: "Any_Call_Above"}}, {var: "Any_Call_Below"}]}]
+    output: "Going_Up"
+
   - name: "Target_Floor"
     type: "if"
-    note: "Unchanged from Elevator_System_1. Priority order when more than one call is active: ground first, then 1st, then 2nd. Reads the raw buttons, not the latches below."
+    note: |
+      Real LOOK dispatch (see note 6 above), not Elevator_System_1's
+      lowest-floor-wins order. Branches on Going_Up, then picks the
+      NEAREST active call in that direction relative to Current_Floor --
+      not the furthest (that would be plain SCAN, and would sail past
+      closer calls without stopping, since arrival detection below only
+      fires on an exact Current_Floor == Target_Floor match). The fallback
+      in both branches is Current_Floor itself, not a fixed floor -- an
+      idle car with nothing pending simply targets wherever it already is,
+      so Moving correctly reads False with no separate Any_Pending check
+      needed on it.
     expression:
       if:
-        - {var: "Call_Floor0"}
-        - 0
+        - {var: "Going_Up"}
         - if:
-            - {var: "Call_Floor1"}
+            - {and: [{var: "Call_Floor1"}, {gt: [1, {var: "Current_Floor"}]}]}
             - 1
             - if:
-                - {var: "Call_Floor2"}
+                - {and: [{var: "Call_Floor2"}, {gt: [2, {var: "Current_Floor"}]}]}
                 - 2
-                - 0
+                - if:
+                    - {and: [{var: "Call_Floor3"}, {gt: [3, {var: "Current_Floor"}]}]}
+                    - 3
+                    - if:
+                        - {and: [{var: "Call_Floor4"}, {gt: [4, {var: "Current_Floor"}]}]}
+                        - 4
+                        - if:
+                            - {and: [{var: "Call_Floor5"}, {gt: [5, {var: "Current_Floor"}]}]}
+                            - 5
+                            - {var: "Current_Floor"}
+        - if:
+            - {and: [{var: "Call_Floor0"}, {lt: [0, {var: "Current_Floor"}]}]}
+            - 0
+            - if:
+                - {and: [{var: "Call_Floor1"}, {lt: [1, {var: "Current_Floor"}]}]}
+                - 1
+                - if:
+                    - {and: [{var: "Call_Floor2"}, {lt: [2, {var: "Current_Floor"}]}]}
+                    - 2
+                    - if:
+                        - {and: [{var: "Call_Floor3"}, {lt: [3, {var: "Current_Floor"}]}]}
+                        - 3
+                        - if:
+                            - {and: [{var: "Call_Floor4"}, {lt: [4, {var: "Current_Floor"}]}]}
+                            - 4
+                            - {var: "Current_Floor"}
     output: "Target_Floor"
 
   - name: "Any_Pending"
@@ -126,6 +255,9 @@ operations:
         - {var: "Call_Floor0"}
         - {var: "Call_Floor1"}
         - {var: "Call_Floor2"}
+        - {var: "Call_Floor3"}
+        - {var: "Call_Floor4"}
+        - {var: "Call_Floor5"}
     output: "Any_Pending"
 
   # --- Movement command: the one signal that actually leaves the graph ---
@@ -140,12 +272,12 @@ operations:
     output: "Moving"
 
   # --- Doors: opening, holding, and closing once the car arrives ---
-  # Unchanged from Elevator_System_1 -- see note 4 above.
 
   - name: "Doors_Open"
     type: "RS"
+    note: "Reset fires on either the normal hold timer OR the manual close-door button -- same wiring as Elevator_System_1."
     Set: [{var: "Just_Arrived"}]
-    Reset: [{var: "Door_Timer_Q"}]
+    Reset: [{var: "Door_Timer_Q"}, {var: "Close_Door_Button"}]
     output: "Doors_Open"
 
   - name: "Just_Arrived"
@@ -153,13 +285,41 @@ operations:
     IN: {var: "Just_Arrived_Level"}
     output: "Just_Arrived"
 
+  - name: "Call_At_Current_Floor"
+    type: "or"
+    note: |
+      Whether ANY pending call sits exactly at Current_Floor right now.
+      This exists because comparing Current_Floor to Target_Floor for
+      arrival detection is fragile under LOOK dispatch: the instant the
+      car reaches a floor, Any_Call_Above/Below immediately re-evaluate
+      using that new position, which can flip Going_Up and change
+      Target_Floor to the NEXT destination in the very same scan --
+      BEFORE arrival at the floor it just reached ever gets checked.
+      Confirmed behaviorally: without this, a car reaching floor 4 with
+      floor 1 also pending would see Target_Floor jump to 1 before
+      Just_Arrived_Condition ever saw Current_Floor == Target_Floor == 4,
+      so it would sail straight through 4 without stopping, and
+      Floor4_Request would never clear. Checking for a call AT the current
+      position, rather than a match against a value that can change out
+      from under the comparison in the same scan, is decoupled from
+      whatever Going_Up/Target_Floor do this scan -- it only depends on
+      Call_FloorN and Current_Floor directly.
+    expression:
+      or:
+        - {and: [{var: "Call_Floor0"}, {eq: [0, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor1"}, {eq: [1, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor2"}, {eq: [2, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor3"}, {eq: [3, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor4"}, {eq: [4, {var: "Current_Floor"}]}]}
+        - {and: [{var: "Call_Floor5"}, {eq: [5, {var: "Current_Floor"}]}]}
+    output: "Call_At_Current_Floor"
+
   - name: "Just_Arrived_Condition"
     type: "and"
-    note: "Requires Any_Pending, not just Current_Floor==Target_Floor -- otherwise this fires spuriously at simulation start, since idle-with-no-calls also happens to leave Target_Floor equal to Current_Floor (see Target_Floor's fallback above)."
+    note: "Just Call_At_Current_Floor directly -- it already implies a real pending call, so the old Any_Pending guard (needed back when this compared against Target_Floor's idle fallback) isn't needed either. Wrapped in a trivial and[] rather than aliased directly so the operation's own name stays Just_Arrived_Level for Just_Arrived's R_TRIG to read, unchanged from before."
     expression:
       and:
-        - {var: "Any_Pending"}
-        - eq: [{var: "Current_Floor"}, {var: "Target_Floor"}]
+        - {var: "Call_At_Current_Floor"}
     output: "Just_Arrived_Level"
 
   - name: "Door_Timer_Q"
@@ -210,3 +370,21 @@ operations:
     Set: [{var: "Call_Floor2"}]
     Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 2]}]}]
     output: "Floor2_Request"
+
+  - name: "Floor3_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor3"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 3]}]}]
+    output: "Floor3_Request"
+
+  - name: "Floor4_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor4"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 4]}]}]
+    output: "Floor4_Request"
+
+  - name: "Floor5_Request"
+    type: "RS"
+    Set: [{var: "Call_Floor5"}]
+    Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 5]}]}]
+    output: "Floor5_Request"
