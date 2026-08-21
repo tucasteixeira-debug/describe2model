@@ -10,7 +10,7 @@ Iteration is essentially a loop:
 
 **idea / hypothesis → information → refined idea / hypothesis → information → ...**
 
-That information is more than just validation. It means understanding how the system actually behaves: its subtleties, interactions, edge cases, robustness, physical behaviour, and the consequences of changing something.
+That information is more than just validation. It means understanding how the system actually behaves: how its different parts interact, how outcomes can be traced through those interactions, what each building block contributes, the subtleties in their behaviour, the physical processes underneath the logic, its robustness and edge cases, and the consequences of changing something.
 
 For effective iteration, the rate at which you can generate ideas should be matched by the rate at which you can generate information about them. That is what makes simulation so powerful.
 
