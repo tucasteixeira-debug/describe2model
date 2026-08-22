@@ -1,4 +1,4 @@
-# run_simulation.py -- Elevator_System_1
+# run_simulation1.py -- Elevator_System_1
 #
 # No scenario_fn anymore -- run_interactive() drives the simulation live,
 # in response to floor/close-door buttons actually being clicked, so

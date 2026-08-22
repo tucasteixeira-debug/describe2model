@@ -1,4 +1,4 @@
-# run_simulation.py -- Elevator_System_2
+# run_simulation2.py -- Elevator_System_2
 #
 # Same rebuild as Elevator_System_1's version: no scenario_fn, setup only,
 # then hand off to the live engine. The only real difference is the six
@@ -14,12 +14,12 @@ ENGINE_DIR = REPO_ROOT / "engine"
 
 sys.path.insert(0, str(ENGINE_DIR))
 sys.path.insert(0, str(EXAMPLE_DIR))
-sys.path.insert(0, str(THIS_DIR))                     # car_physics.py lives here
+sys.path.insert(0, str(THIS_DIR))                     # car_physics_2.py lives here
 
 from scan_cycle import load_data
 from simulation_runner import setup_simulation
 from elevator_viz import run_interactive
-from car_physics import Elevator_Plant
+from car_physics_2 import Elevator_Plant
 
 
 def find_yaml(folder):
@@ -36,7 +36,7 @@ YAML_PATH = find_yaml(THIS_DIR)
 def build_plant(yaml_path):
     # Every physical constant is read straight out of the YAML's
     # physical_constants -- no defaults are supplied here, deliberately
-    # (see car_physics.py's own note on this).
+    # (see car_physics_2.py's own note on this).
     data = load_data(yaml_path)
     consts = data["physical_constants"]
     return Elevator_Plant(

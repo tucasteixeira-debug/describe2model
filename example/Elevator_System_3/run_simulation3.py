@@ -1,4 +1,4 @@
-# run_simulation.py -- Elevator_System_3
+# run_simulation3.py -- Elevator_System_3
 #
 # Same setup-only role as Elevator_System_1/2's scripts. One real
 # difference this stage's own story benefits from: auto_cycle_floors is

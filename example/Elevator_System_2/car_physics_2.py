@@ -1,23 +1,23 @@
-# car_physics.py
+# car_physics_2.py
 #
 # Elevator_System_2's physics plant. NOT PLC logic -- a kinematic model
 # invented for this project so the engine has real motion to simulate,
 # never something you'd find in an operations list. Kept in its own file,
 # outside engine/ entirely (engine/ stays generic, per PROJECT_STATE.md's
 # own stated architecture) -- this is elevator-specific, so it lives
-# alongside elevator.yaml.
+# alongside elevator_2.yaml.
 #
 # Runs OUTSIDE the operations sequence -- called once per scan, AFTER
 # run_scan() (so it can read this scan's real Moving/Target_Floor), writing
 # the NEXT scan's Current_Floor/Velocity_FloorsPerSec into tags before
 # run_scan() is called again. Same seam as any runtime_input a real sensor
-# would feed -- see elevator.yaml's note 1 for why Current_Floor is declared
+# would feed -- see elevator_2.yaml's note 1 for why Current_Floor is declared
 # under runtime_inputs, not outputs.
 #
 # SCOPE: this is a KINEMATIC model (velocity and acceleration specified
 # directly, in floors and floors/second) not a DYNAMIC one (no mass, no
 # motor torque, no force balance). That's a deliberate simplification, not
-# an oversight -- Elevator_System_2's actual requirement (see description.md)
+# an oversight -- Elevator_System_2's actual requirement (see description_2.md)
 # is that the logic stops owning position and has to command/read a
 # physical layer instead. Getting a genuine trapezoidal velocity profile in
 # is enough to satisfy that; deriving it from force and mass would add
@@ -33,7 +33,7 @@
 #     below) the braking distance v^2 / (2 * Deceleration) at the current
 #     speed.
 # Acceleration and Deceleration are independent, tunable rates (see
-# elevator.yaml's physical_constants -- they default equal, but nothing in
+# elevator_2.yaml's physical_constants -- they default equal, but nothing in
 # this class assumes they are).
 
 class Elevator_Plant:
@@ -43,8 +43,8 @@ class Elevator_Plant:
         # max_velocity/acceleration/deceleration/arrival_tolerance/top_floor/
         # velocity_snap_tolerance have NO defaults, deliberately. Every one
         # of them is a physical property of the car and belongs in exactly
-        # one place -- elevator.yaml's physical_constants -- with its
-        # justification traced back to description.md's stated requirement
+        # one place -- elevator_2.yaml's physical_constants -- with its
+        # justification traced back to description_2.md's stated requirement
         # (cruise speed and accel/decel both set by "~2 seconds," arrival/
         # velocity tolerances flagged there as having no requirement behind
         # them at all). A default here would be a second, silent source of
@@ -79,7 +79,7 @@ class Elevator_Plant:
         # before any acceleration-rate limiting is applied. This is the one
         # place direction and the decelerate-early decision both get made.
         if not moving_permitted:
-            # The logic has withdrawn run permission (see elevator.yaml note
+            # The logic has withdrawn run permission (see elevator_2.yaml note
             # 2 -- this is Moving going false). Modeled as commanding a
             # controlled stop, not an instant freeze -- a real drive doesn't
             # teleport to zero speed just because an interlock dropped.
@@ -124,7 +124,7 @@ class Elevator_Plant:
         self.position = self.position + self.velocity * self.scan_time
 
         # Defensive shaft bounds. Target_Floor's own dispatch logic (the
-        # nested `if` chain in elevator.yaml) never asks for a value outside
+        # nested `if` chain in elevator_2.yaml) never asks for a value outside
         # [0, Top_Floor], so this shouldn't trigger in normal operation --
         # it's a bound on the physical shaft, not a substitute for the
         # dispatch logic staying in range. Same "correcting a numerical

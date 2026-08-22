@@ -15,7 +15,7 @@
 # topological_sorter, build_operation_lookout, then a for-loop calling
 # run_scan and optionally plant.step) at the top of a throwaway script.
 # That boilerplate is now here once, verified against the real engine, so
-# every example's own run_simulation.py can just call this and get straight
+# every example's own run_simulationN.py can just call this and get straight
 # to the part that's actually specific to that example: which YAML, which
 # physics plant (if any), and what scenario to run.
 

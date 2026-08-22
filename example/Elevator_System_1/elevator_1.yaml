@@ -1,5 +1,5 @@
 # Elevator_System_1 -- pure logic, no physical modeling.
-# See examples/elevator/Elevator_System_1/description.md for the plain-English
+# See example/Elevator_System_1/description_1.md for the plain-English
 # version this was translated from.
 #
 # Floors are numbered 0 (ground) through 5 -- six floors, not the original

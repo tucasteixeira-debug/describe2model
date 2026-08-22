@@ -1,6 +1,6 @@
 # Elevator_System_3 -- monitoring layer: compare actual physics against a
 # nominal reference, catch slow drift with CUSUM.
-# See examples/elevator/Elevator_System_3/description.md for the plain-
+# See example/Elevator_System_3/description_3.md for the plain-
 # English problem statement this was translated from.
 #
 # ALL dispatch/door logic below (Target_Floor's LOOK algorithm, Doors_Open,
@@ -38,8 +38,8 @@
 #    runtime_inputs, NOT outputs -- deliberately. In Elevator_System_1,
 #    Current_Floor was a CTUD operation the logic drove itself, which is
 #    exactly the authority a real logic controller doesn't have (see
-#    description.md). Here it's written every scan by an external physics
-#    plant (examples/elevator/Elevator_System_2/car_physics.py, called once
+#    description_3.md). Here it's written every scan by an external physics
+#    plant (example/Elevator_System_2/car_physics_2.py, called once
 #    per scan, AFTER run_scan() -- same seam engine/scan_cycle.py already
 #    reserves for physical_constants, just not exercised until now). From
 #    the engine's point of view that makes Current_Floor structurally
@@ -92,7 +92,7 @@
 #    not revisited here.
 #
 # 6. Target_Floor implements real LOOK dispatch (see docs/architecture.md
-#    and Elevator_System_2's description.md for the full research and the
+#    and Elevator_System_2's description_2.md for the full research and the
 #    proof this needed Current_Floor to be a runtime_input, not a CTUD).
 #    Call_At_Current_Floor exists so arrival detection doesn't race against
 #    Going_Up flipping direction in the same scan -- see its own note
@@ -144,8 +144,8 @@ hmi_configuration:
   Door_Hold_Time: {type: REAL, default: 6}
   Never: {type: BOOL, default: false}
   One_Second: {type: REAL, default: 1}
-  Slack_K: {type: REAL, default: 0.02, note: "CUSUM's allowable slack, floors/second, applied to |Velocity_Residual|. Sized empirically, not by formula -- a healthy critically-damped system's transient tracking noise peaks around 0.011-0.045 floors/second at each accel/cruise/decel transition (confirmed by direct simulation, see description.md), so 0.02 sits inside that healthy noise band on purpose: a healthy run's CUSUM_High stays near zero (measured peak 0.0114 over 200 simulated round trips with zero wear) while still being small enough for real wear-driven residual to accumulate past it once damping degrades."}
-  Threshold_H: {type: REAL, default: 0.25, note: "CUSUM's alarm threshold. Tuned empirically against this file's actual trip-by-trip CUSUM trajectory, not derived from a formula: with the default Wear_Rate, CUSUM_High stays under 0.02 through roughly the first 20 trips, then grows sharply as Damping_Ratio drops through its most consequential range, crossing this threshold right around the trip where damping bottoms out (measured: trip 46, damping already at its floor of 0.15) -- not dozens of trips after, and not while damping is still mostly healthy. See description.md for the full tuning trace."}
+  Slack_K: {type: REAL, default: 0.02, note: "CUSUM's allowable slack, floors/second, applied to |Velocity_Residual|. Sized empirically, not by formula -- a healthy critically-damped system's transient tracking noise peaks around 0.011-0.045 floors/second at each accel/cruise/decel transition (confirmed by direct simulation, see description_3.md), so 0.02 sits inside that healthy noise band on purpose: a healthy run's CUSUM_High stays near zero (measured peak 0.0114 over 200 simulated round trips with zero wear) while still being small enough for real wear-driven residual to accumulate past it once damping degrades."}
+  Threshold_H: {type: REAL, default: 0.25, note: "CUSUM's alarm threshold. Tuned empirically against this file's actual trip-by-trip CUSUM trajectory, not derived from a formula: with the default Wear_Rate, CUSUM_High stays under 0.02 through roughly the first 20 trips, then grows sharply as Damping_Ratio drops through its most consequential range, crossing this threshold right around the trip where damping bottoms out (measured: trip 46, damping already at its floor of 0.15) -- not dozens of trips after, and not while damping is still mostly healthy. See description_3.md for the full tuning trace."}
 
 # Physical properties of the car and shaft, consumed only by the physics
 # plant's Python constructor -- never referenced in any operation's
@@ -153,18 +153,18 @@ hmi_configuration:
 # node-wrapped. Declared here anyway, in one place, rather than left as
 # hardcoded Python defaults -- same modularity reasoning as keeping every
 # other tunable constant in the YAML: one source of truth, not a number
-# quietly duplicated between this file and car_physics.py.
+# quietly duplicated between this file and car_physics_2.py.
 physical_constants:
   Top_Floor: {type: REAL, value: 5, note: "Upper position bound, shared by both plants. Nothing in the operations graph reads it -- neither Current_Floor nor Nominal_Current_Floor is an operation."}
-  Max_Velocity: {type: REAL, value: 0.5, note: "NominalPlant's cruise speed, floors/second. Unchanged from Elevator_System_2 -- see that stage's description.md for the ~2-second requirement this comes from. NominalPlant is otherwise byte-for-byte the same model, so this and the next two constants keep the same values and the same justification."}
+  Max_Velocity: {type: REAL, value: 0.5, note: "NominalPlant's cruise speed, floors/second. Unchanged from Elevator_System_2 -- see that stage's description_2.md for the ~2-second requirement this comes from. NominalPlant is otherwise byte-for-byte the same model, so this and the next two constants keep the same values and the same justification."}
   Acceleration: {type: REAL, value: 0.25, note: "NominalPlant's, floors/second^2. Unchanged from Elevator_System_2."}
   Deceleration: {type: REAL, value: 0.25, note: "NominalPlant's, floors/second^2. Unchanged from Elevator_System_2."}
   Arrival_Tolerance: {type: REAL, value: 0.02, note: "floors. Used by BOTH plants' own arrival-snap logic, same numerical-implementation-detail reasoning as Elevator_System_2 -- no plain-English requirement behind it, not meant to have one."}
   Velocity_Snap_Tolerance: {type: REAL, value: 0.01, note: "floors/second. Same as Arrival_Tolerance above -- used by both plants, no requirement behind it."}
-  Natural_Frequency: {type: REAL, value: 2.0, note: "ActualPlant's omega_n, rad/s. NOT the first value tried -- 8.0 was the original guess (fast enough that healthy tracking looked tight), but confirmed empirically that it was too fast in a different sense: even fully worn (Damping_Ratio at its floor), the resulting residual peaked around 0.006 floors/second, barely above healthy noise, because the system reabsorbed each disturbance before underdamping had time to build visible amplitude. 2.0 keeps healthy tracking reasonable while giving a worn system's ringing enough room to actually show up -- see description.md for the comparison that led here."}
+  Natural_Frequency: {type: REAL, value: 2.0, note: "ActualPlant's omega_n, rad/s. NOT the first value tried -- 8.0 was the original guess (fast enough that healthy tracking looked tight), but confirmed empirically that it was too fast in a different sense: even fully worn (Damping_Ratio at its floor), the resulting residual peaked around 0.006 floors/second, barely above healthy noise, because the system reabsorbed each disturbance before underdamping had time to build visible amplitude. 2.0 keeps healthy tracking reasonable while giving a worn system's ringing enough room to actually show up -- see description_3.md for the comparison that led here."}
   Initial_Damping_Ratio: {type: REAL, value: 1.0, note: "ActualPlant starts critically damped -- the fastest possible response with no overshoot. A real elevator is deliberately engineered this way; nobody wants a car that bounces. This is the 'healthy' state wear degrades away from."}
   Damping_Floor: {type: REAL, value: 0.15, note: "The lowest damping ratio wear can degrade to -- deliberately not 0. Zero damping is a qualitatively different failure mode (sustained oscillation that never settles) that isn't what this stage demonstrates; 0.15 is well into visibly underdamped (real overshoot and ringing) without ever losing stability."}
-  Wear_Rate: {type: REAL, value: 0.0015, note: "Damping ratio lost per second of Moving=True (usage-based, not calendar-time). Tuned so the car reaches Damping_Floor after roughly 45-50 one-way trips of continuous use -- long enough that early trips look completely healthy (matching a real slow-onset wear story), short enough to actually observe the full arc in a reasonable test run. See description.md for the measured trip-by-trip trace this was tuned against."}
+  Wear_Rate: {type: REAL, value: 0.0015, note: "Damping ratio lost per second of Moving=True (usage-based, not calendar-time). Tuned so the car reaches Damping_Floor after roughly 45-50 one-way trips of continuous use -- long enough that early trips look completely healthy (matching a real slow-onset wear story), short enough to actually observe the full arc in a reasonable test run. See description_3.md for the measured trip-by-trip trace this was tuned against."}
 
 outputs:
   Target_Floor: {type: REAL}

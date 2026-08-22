@@ -4,7 +4,7 @@
 # not one.
 #
 #   - NominalPlant: the exact same trapezoidal accel/cruise/decel model as
-#     Elevator_System_2's car_physics.py -- what a HEALTHY car should be
+#     Elevator_System_2's car_physics_2.py -- what a HEALTHY car should be
 #     doing, computed fresh from Moving/Target_Floor each scan, completely
 #     decoupled from whatever the real car is actually doing. It never
 #     reads the actual plant's state at all. This independence matters: if
@@ -28,7 +28,7 @@
 # proportional to how long the car has actually been commanded to move
 # (accumulated only while Moving=True, not real/wall-clock time) -- bearing
 # and damper wear comes from usage, not from sitting idle. This is what
-# Elevator_System_3's CUSUM layer (see elevator.yaml) is built to catch:
+# Elevator_System_3's CUSUM layer (see elevator_3.yaml) is built to catch:
 # not a constant offset between nominal and actual (a fixed threshold would
 # catch that on day one, no history needed), but a residual that starts
 # near zero and grows slowly, trip after trip, the way a real degrading

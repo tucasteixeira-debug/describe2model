@@ -21,7 +21,7 @@
 # close-door buttons being clicked live. That's a real, deliberate coupling
 # to the engine layer that the other three functions don't have -- a
 # caller using run_interactive() needs engine/ on sys.path, the same way
-# run_simulation.py already puts it there before importing this file.
+# run_simulationN.py already puts it there before importing this file.
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
@@ -189,7 +189,7 @@ def _calls_at(history, t, call_keys):
 
 def _format_command_actual(history, t):
     # The visible proof of the commanded/actual split described in
-    # Elevator_System_2's description.md: Moving is what the logic
+    # Elevator_System_2's description_2.md: Moving is what the logic
     # COMMANDS, Velocity_FloorsPerSec is what the physics plant ACTUALLY
     # produces. They always agree today -- the plant is perfectly obedient
     # -- but showing them as two separately-sourced numbers, side by side,
@@ -539,7 +539,7 @@ def show_live(history, top_floor, call_keys=("Floor0_Request", "Floor1_Request",
     """
     Opens an interactive, scrubbable player over one simulation's history:
     a draggable slider covering every scan plus a Play/Pause button. This
-    is the "engine" half of the split -- run_simulation.py's only job is
+    is the "engine" half of the split -- each stage's run_simulationN.py's only job is
     to produce a history dict and call this once; everything about HOW
     that result is displayed and navigated (forward, backward, paused,
     mid-scrub) lives here, not scattered across every stage's own script.

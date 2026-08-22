@@ -38,6 +38,13 @@ That modularity isn't just an architectural nicety — it's the actual point. A 
 
 A placeholder becoming a real physics plant, a physics plant later feeding a monitoring layer, a monitoring layer eventually informed by something like ML — each of those is capability added on top of the same graph, not a rebuild.
 
+## Where to go from here
+
+- **[`docs/`](docs/)** — the technical deep dive: the YAML format, the expression syntax, and how the engine actually executes a file, scan by scan. This is where the mechanism behind the idea above is explained in full.
+- **[`example/`](example/)** — the idea in practice, not just in theory. A single elevator, taken through three stages of increasingly sophisticated requirements, each a genuine upgrade rather than a rebuild — this is where you can actually see the modularity the pitch above is about. Each stage has its own description and its own documentation.
+
+If you want to run it yourself rather than just read about it: Python 3.9+, `pip install pyyaml matplotlib`, then `cd` into any stage's folder and run its `run_simulationN.py`.
+
 ## Status
 
 Early stage. The core engine — dependency-graph parsing, topological sorting, and scan-cycle evaluation — is working.
