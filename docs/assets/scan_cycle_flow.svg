@@ -1,0 +1,73 @@
+<svg viewBox="0 0 900 460" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <style>
+    .box { fill: #f4f6f8; stroke: #333; stroke-width: 1.5; rx: 8; }
+    .box-accent { fill: #eef2ff; stroke: #33449a; stroke-width: 1.5; rx: 8; }
+    .title { font-size: 15px; font-weight: 600; fill: #111; }
+    .sub { font-size: 11.5px; fill: #444; }
+    .step-label { font-size: 12px; fill: #555; font-style: italic; }
+    .arrow { stroke: #444; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+  </style>
+
+  <!-- 1. Plain English -->
+  <rect class="box" x="30" y="30" width="220" height="70"/>
+  <text class="title" x="140" y="58" text-anchor="middle">Plain-English description</text>
+  <text class="sub" x="140" y="78" text-anchor="middle">"the doors open once the car arrives,</text>
+  <text class="sub" x="140" y="92" text-anchor="middle">and stay open for 6 seconds"</text>
+
+  <!-- arrow 1 -->
+  <path class="arrow" d="M 250 65 L 320 65"/>
+  <text class="step-label" x="285" y="55" text-anchor="middle">translate</text>
+
+  <!-- 2. YAML file -->
+  <rect class="box-accent" x="330" y="20" width="240" height="90"/>
+  <text class="title" x="450" y="45" text-anchor="middle">YAML file</text>
+  <text class="sub" x="450" y="63" text-anchor="middle">tags (inputs / config / outputs)</text>
+  <text class="sub" x="450" y="79" text-anchor="middle">+ operations (the logic graph)</text>
+  <text class="sub" x="450" y="95" text-anchor="middle">written in any order</text>
+
+  <!-- arrow 2 down -->
+  <path class="arrow" d="M 450 110 L 450 155"/>
+  <text class="step-label" x="530" y="135">topological_sort</text>
+
+  <!-- 3. ordered operations -->
+  <rect class="box" x="330" y="165" width="240" height="60"/>
+  <text class="title" x="450" y="190" text-anchor="middle">Ordered operations list</text>
+  <text class="sub" x="450" y="208" text-anchor="middle">a valid execution order, computed once</text>
+
+  <!-- arrow 3 down -->
+  <path class="arrow" d="M 450 225 L 450 265"/>
+
+  <!-- 4. scan cycle loop -->
+  <rect class="box-accent" x="290" y="275" width="320" height="150"/>
+  <text class="title" x="450" y="300" text-anchor="middle">run_scan (repeats every scan)</text>
+
+  <rect class="box" x="320" y="315" width="110" height="45"/>
+  <text class="sub" x="375" y="333" text-anchor="middle">evaluate() each</text>
+  <text class="sub" x="375" y="348" text-anchor="middle">operation, in order</text>
+
+  <path class="arrow" d="M 430 337 L 470 337"/>
+
+  <rect class="box" x="480" y="315" width="110" height="45"/>
+  <text class="sub" x="535" y="333" text-anchor="middle">write each result</text>
+  <text class="sub" x="535" y="348" text-anchor="middle">back into tags</text>
+
+  <!-- loop back arrow -->
+  <path class="arrow" d="M 590 390 C 630 420, 320 420, 340 390"/>
+  <text class="step-label" x="450" y="412" text-anchor="middle">next scan reads what this scan wrote</text>
+
+  <!-- shared tags note -->
+  <rect x="30" y="330" width="220" height="80" fill="none" stroke="#999" stroke-dasharray="4 3" rx="6"/>
+  <text class="sub" x="140" y="352" text-anchor="middle" font-weight="600">shared "tags" dict</text>
+  <text class="sub" x="140" y="370" text-anchor="middle">every operation reads and</text>
+  <text class="sub" x="140" y="384" text-anchor="middle">writes here -- this is the</text>
+  <text class="sub" x="140" y="398" text-anchor="middle">only state that persists</text>
+
+  <path class="arrow" d="M 250 370 L 290 350" stroke-dasharray="3 3"/>
+
+</svg>
