@@ -1,0 +1,53 @@
+<svg viewBox="0 0 780 380" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
+    </marker>
+  </defs>
+  <style>
+    .node { fill: #eef2ff; stroke: #33449a; stroke-width: 1.4; rx: 7; }
+    .leaf { fill: #f4f6f8; stroke: #333; stroke-width: 1.4; rx: 7; }
+    .code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; fill: #111; }
+    .lbl { font-size: 11px; fill: #666; font-style: italic; }
+    .edge { stroke: #666; stroke-width: 1.4; fill: none; marker-end: url(#arrow2); }
+  </style>
+
+  <text x="390" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#111">evaluate() on Current_Floor's CU field -- one call per node, top to bottom</text>
+
+  <!-- root: and -->
+  <rect class="node" x="290" y="45" width="200" height="40"/>
+  <text class="code" x="390" y="69" text-anchor="middle">{and: [ ... , ... ]}</text>
+
+  <path class="edge" d="M 340 85 L 220 130"/>
+  <path class="edge" d="M 440 85 L 560 130"/>
+
+  <!-- left child: var Travel_Pulse (base case) -->
+  <rect class="leaf" x="120" y="130" width="200" height="40"/>
+  <text class="code" x="220" y="154" text-anchor="middle">{var: "Travel_Pulse"}</text>
+  <text class="lbl" x="220" y="190" text-anchor="middle">base case -- tags["Travel_Pulse"]</text>
+  <text class="lbl" x="220" y="205" text-anchor="middle">no recursion, returns directly</text>
+
+  <!-- right child: gt -->
+  <rect class="node" x="460" y="130" width="200" height="40"/>
+  <text class="code" x="560" y="154" text-anchor="middle">{gt: [ ... , ... ]}</text>
+
+  <path class="edge" d="M 510 170 L 440 220"/>
+  <path class="edge" d="M 610 170 L 680 220"/>
+
+  <!-- gt's left: var Target_Floor -->
+  <rect class="leaf" x="330" y="220" width="220" height="40"/>
+  <text class="code" x="440" y="244" text-anchor="middle">{var: "Target_Floor"}</text>
+
+  <!-- gt's right: var Current_Floor (self-reference) -->
+  <rect class="leaf" x="570" y="220" width="200" height="40"/>
+  <text class="code" x="670" y="244" text-anchor="middle">{var: "Current_Floor"}</text>
+  <text class="lbl" x="670" y="278" text-anchor="middle">reads THIS operation's</text>
+  <text class="lbl" x="670" y="292" text-anchor="middle">own last-scan value</text>
+
+  <text x="390" y="340" text-anchor="middle" class="lbl" font-style="normal" font-size="12">
+    Same one function, `evaluate(node, tags)`, called on each box -- the whole expression
+  </text>
+  <text x="390" y="358" text-anchor="middle" class="lbl" font-style="normal" font-size="12">
+    language is one recursive function with no separate parser step.
+  </text>
+</svg>
