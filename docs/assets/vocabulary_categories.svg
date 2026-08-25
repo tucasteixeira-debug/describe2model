@@ -1,4 +1,4 @@
-<svg viewBox="0 0 820 260" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+<svg viewBox="0 0 940 260" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
   <style>
     .box { fill: #eef2ff; stroke: #33449a; stroke-width: 1.4; rx: 9; }
     .box2 { fill: #fff2e8; stroke: #a85b1f; stroke-width: 1.4; rx: 9; }
@@ -7,25 +7,25 @@
     .item { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; fill: #222; }
   </style>
 
-  <text x="410" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#111">Every operation is one of two kinds</text>
+  <text x="470" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#111">Every operation is one of two kinds</text>
 
   <!-- stateless -->
-  <rect class="box" x="30" y="45" width="360" height="195"/>
-  <text class="title" x="210" y="72" text-anchor="middle">Stateless</text>
-  <text class="sub" x="210" y="90" text-anchor="middle">recomputed fresh every scan -- no memory of its own</text>
-  <text class="item" x="210" y="120" text-anchor="middle">and · or · !  · gt · lt · ge · le · eq · if · + · -  · wiring</text>
-  <text class="sub" x="210" y="150" text-anchor="middle">one field: `expression`,</text>
-  <text class="sub" x="210" y="165" text-anchor="middle">a single JsonLogic tree</text>
-  <text class="sub" x="210" y="200" text-anchor="middle">think: a plain comparison or gate --</text>
-  <text class="sub" x="210" y="215" text-anchor="middle">"is the door held open right now?"</text>
+  <rect class="box" x="20" y="45" width="440" height="195"/>
+  <text class="title" x="240" y="72" text-anchor="middle">Stateless</text>
+  <text class="sub" x="240" y="90" text-anchor="middle">recomputed fresh every scan -- no memory of its own</text>
+  <text class="item" x="240" y="120" text-anchor="middle">and · or · !  · gt · lt · ge · le · eq · if · + · -  · wiring</text>
+  <text class="sub" x="240" y="150" text-anchor="middle">one field: `expression`,</text>
+  <text class="sub" x="240" y="165" text-anchor="middle">a single JsonLogic tree</text>
+  <text class="sub" x="240" y="200" text-anchor="middle">think: a plain comparison or gate --</text>
+  <text class="sub" x="240" y="215" text-anchor="middle">"is the door held open right now?"</text>
 
   <!-- function blocks -->
-  <rect class="box2" x="430" y="45" width="360" height="195"/>
-  <text class="title" x="610" y="72" text-anchor="middle">Function blocks</text>
-  <text class="sub" x="610" y="90" text-anchor="middle">carry memory between scans</text>
-  <text class="item" x="610" y="120" text-anchor="middle">R_TRIG · TON · RS · CTUD · PID</text>
-  <text class="sub" x="610" y="150" text-anchor="middle">their own named fields</text>
-  <text class="sub" x="610" y="165" text-anchor="middle">(IN/PT, Set/Reset, CU/CD...)</text>
-  <text class="sub" x="610" y="200" text-anchor="middle">think: "has it been 6 seconds</text>
-  <text class="sub" x="610" y="215" text-anchor="middle">since the door opened?"</text>
+  <rect class="box2" x="480" y="45" width="440" height="195"/>
+  <text class="title" x="700" y="72" text-anchor="middle">Function blocks</text>
+  <text class="sub" x="700" y="90" text-anchor="middle">carry memory between scans</text>
+  <text class="item" x="700" y="120" text-anchor="middle">R_TRIG · TON · RS · CTUD · PID</text>
+  <text class="sub" x="700" y="150" text-anchor="middle">their own named fields</text>
+  <text class="sub" x="700" y="165" text-anchor="middle">(IN/PT, Set/Reset, CU/CD...)</text>
+  <text class="sub" x="700" y="200" text-anchor="middle">think: "has it been 6 seconds</text>
+  <text class="sub" x="700" y="215" text-anchor="middle">since the door opened?"</text>
 </svg>
