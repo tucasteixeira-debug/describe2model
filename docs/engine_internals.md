@@ -55,8 +55,34 @@ lookout = build_operation_lookout(raw_operations)
 operations = [lookout[name] for name in order]   # this is what run_scan takes
 ```
 
-`graph_builder` walks every operation's fields, finds every `{var: "X"}` reference, and adds a dependency edge if `X` is produced by another operation — self-references are skipped on purpose (why, and what that enables, is in the YAML guide's cycle-rule section). `topological_sorter` turns that graph into a valid order; you never hand-order the YAML file.
+`graph_builder` walks every operation's fields, finds every `{var: "X"}` reference, and adds a dependency edge if `X` is produced by another operation — self-references are skipped on purpose, which is the whole subject of the next section. `topological_sorter` turns that graph into a valid order; you never hand-order the YAML file.
 - **`scan_cycle.py`** — everything around a single scan: `load_data()` reads the YAML, `build_initial_tags()`/`seed_operation_outputs()` seed `tags` before scan 1, `build_fb_instances()` builds one function-block object per stateful operation, `run_scan()` is the loop above.
+
+## Cycles, and the one exception that makes self-reference possible
+
+If operation A reads a tag produced by B, and B (even transitively) reads a tag produced by A, that's a dependency **cycle** — `topological_sorter` raises `CycleError` rather than silently picking an order. This happens more than it sounds like it should, because "X determines Y, and Y's outcome should affect X" is a very natural thing to want to describe in plain language, and it's exactly what breaks a single-pass evaluation.
+
+**The one exception:** an operation reading its **own** output tag is not a real dependency edge — `graph_builder` explicitly skips it. That's what lets a timer check whether it's already running, or a counter compare against its own position, without being flagged. This exemption is for literal self-reference only — it doesn't extend to two operations referencing each other, no matter how many operations sit between them.
+
+**A concrete example, from the elevator, showing this isn't just a technicality.** A real LOOK-algorithm dispatch needs to compare pending calls against the car's own position. If `Current_Floor` is an operation the logic drives itself (`Elevator_System_1`'s `CTUD`), giving `Target_Floor` a `{var: "Current_Floor"}` reference closes a genuine cross-operation cycle — confirmed empirically by actually building that graph and hitting `CycleError`. Move `Current_Floor` to a `runtime_input` written by external code instead (`Elevator_System_2`), and the identical comparison costs nothing, because `runtime_inputs` never get a producer edge in the first place. The lesson generalizes: some upgrades aren't blocked by missing logic, they're blocked by *who owns the tag* the logic needs to read.
+
+**The exemption isn't limited to function blocks.** A plain stateless `if`/`+`/`-` operation can self-reference its own output the same way, since the exemption is about the tag reference, not the operation type. That's what lets a running accumulator — the kind a CUSUM control chart needs — live as genuine declarative YAML instead of hidden Python state, `example/Elevator_System_3/elevator_3.yaml`:
+
+```yaml
+- name: "CUSUM_High"
+  type: "if"
+  note: "C = max(0, C_prev + |residual| - k). Self-references its own output to accumulate across scans."
+  expression:
+    if:
+      - gt: [{"-": [{"+": [{var: "CUSUM_High"}, {var: "Abs_Velocity_Residual"}]}, {var: "Slack_K"}]}, 0]
+      - {"-": [{"+": [{var: "CUSUM_High"}, {var: "Abs_Velocity_Residual"}]}, {var: "Slack_K"}]}
+      - 0
+  output: "CUSUM_High"
+```
+
+It creates no cycle risk despite reading its own output every scan, for the same reason the `Current_Floor` counter above doesn't.
+
+**When you hit a `CycleError`**, the fix is essentially always the same: find the tag read by both sides of the loop, and change one side to read something else — a raw input instead of a derived value, or the block's own self-reference instead of a separate named intermediate.
 
 ## Where a physics plant actually hooks in
 
