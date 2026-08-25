@@ -4,7 +4,6 @@ The idea is to use a plain data structure — big dictionaries containing lists 
 
 The engine then takes that finite vocabulary and, with a genuinely simple algorithm, runs it at real speed — that mechanism is covered in [`engine_internals.md`](engine_internals.md), not here. This guide is about the description itself: the three design decisions that shape it are how a file is structured, which vocabulary of fundamental operations it's built from, and a syntax simple enough for the engine to process without ambiguity. That's the order this guide follows.
 
-This guide is also deliberately **not elevator-specific**. The elevator in `example/` is one system controlled this way; the format itself doesn't know or care what it's controlling. Anything whose control logic is expressible as *signals, timers, counters, latches, simple comparisons, and simple math, re-evaluated on a fixed scan* fits the same shape — a tank-fill sequence, a traffic light, a conveyor interlock, a batching process. The physics plants in `example/Elevator_System_2` and `3` are a separate layer bolted on *underneath* the control logic — the YAML format described here is purely the decision-making layer, with no opinion about physics at all.
 
 ## Anatomy of a system file
 
