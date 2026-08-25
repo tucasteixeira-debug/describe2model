@@ -4,7 +4,6 @@ The idea is to use a plain data structure — big dictionaries containing lists 
 
 The engine then takes that finite vocabulary and, with a genuinely simple algorithm, runs it at real speed — that mechanism is covered in [`engine_internals.md`](engine_internals.md), not here. This guide is about the description itself: the three design decisions that shape it are a syntax simple enough for the engine to process without ambiguity, how a file is structured, and which vocabulary of fundamental operations it's built from. That's the order this guide follows — starting with the syntax, since it's what every file and every operation is actually written in.
 
-This guide is also deliberately **not elevator-specific**. The elevator in `example/` is one system controlled this way; the format itself doesn't know or care what it's controlling. Anything whose control logic is expressible as *signals, timers, counters, latches, simple comparisons, and simple math, re-evaluated on a fixed scan* fits the same shape — a tank-fill sequence, a traffic light, a conveyor interlock, a batching process. The physics plants in `example/Elevator_System_2` and `3` are a separate layer bolted on *underneath* the control logic — the YAML format described here is purely the decision-making layer, with no opinion about physics at all.
 
 ## Syntax
 
@@ -67,9 +66,9 @@ outputs:
   Moving: {type: BOOL}
 ```
 
-Two distinctions worth being precise about:
+One distinction worth being precise about:
 
-- **`hmi_configuration` vs. `physical_constants`.** Both are fixed numbers, but only `hmi_configuration` entries get referenced inside a JsonLogic expression (`{var: "Door_Hold_Time"}`), so only they need the node-wrapping discipline described in Syntax above. `physical_constants` entries are read directly out of the loaded YAML by whichever Python code builds a physics plant or similar — nothing in the declarative graph ever needs to know a plant's natural frequency. That's also why the field is called `value`, not `default`: it signals at a glance that this number isn't part of the logic graph at all.
+
 - **`runtime_inputs` isn't just "user-facing buttons."** Anything written every scan by code outside the operations graph belongs here — a physics plant's position output counts exactly the same as a button press. The engine doesn't distinguish the two; both are external signals that never get a producer edge in the dependency graph. That distinction is what makes certain structural upgrades possible at all — see the cycle-detection section of [`engine_internals.md`](engine_internals.md).
 
 `type: BOOL` seeds `False`; anything else seeds `0.0`. An `hmi_configuration` entry with no `default` still runs, but gets a placeholder value and a load-time warning — a deliberate surfacing of an unconfirmed assumption, not a bug.
@@ -190,65 +189,3 @@ Nothing new is happening here syntactically — it's the exact same `if` / `and`
 
 There's no loop anywhere, and no dedicated "find the nearest floor" primitive exists in the vocabulary at all — the entire search is just one `if` calling into another `if`, six times over. That's precisely the recursive shape from the Syntax section above, `{gt: [{var: "X"}, {var: "Y"}]}`, just deep enough that the pattern stops being trivial and starts doing real work: the same handful of dict-and-list rules, scaled up, is enough to express a genuine dispatch algorithm.
 
-## A minimal example, outside the elevator domain
-
-To make the "control logic for any real system, not just an elevator" claim concrete: a two-state pedestrian crossing light, with a call button and a fixed walk time, described the same way — and deliberately built using the same cycle-avoidance pattern as `Doors_Open`/`Door_Timer_Q`/`Door_Elapsed` above, as a second worked instance of that rule.
-
-The one design point worth calling out: `Walk_Elapsed` resets on `Call_Pulse` — the *origin* event that also sets `Walk_Light_On` — not on `Walk_Light_On` itself. Resetting it on `Walk_Light_On` instead would close a cycle: `Walk_Light_On` reads `Walk_Timer_Q`, `Walk_Timer_Q` reads `Walk_Elapsed`, and `Walk_Elapsed` would then read back `Walk_Light_On`. Driving both from the same upstream event instead of chaining one off the other's output is the general fix — see [`engine_internals.md`](engine_internals.md) for the mechanism behind why that closes a cycle in the first place.
-
-```yaml
-runtime_inputs:
-  Call_Button: {type: BOOL}
-
-hmi_configuration:
-  Walk_Time: {type: REAL, default: 15}
-  One_Second: {type: REAL, default: 1}
-  Never: {type: BOOL, default: false}
-
-outputs:
-  Call_Pulse: {type: BOOL}
-  Clock_Pulse: {type: BOOL}
-  Walk_Elapsed: {type: REAL}
-  Walk_Timer_Q: {type: BOOL}
-  Walk_Light_On: {type: BOOL}
-
-operations:
-  - name: "Call_Pulse"
-    type: "R_TRIG"
-    note: "The origin event: one scan long, on the press itself."
-    IN: {var: "Call_Button"}
-    output: "Call_Pulse"
-
-  - name: "Clock_Pulse"
-    type: "TON"
-    note: "Free-running one-second pulse -- self-oscillating idiom, same as the elevator's Clock_Pulse."
-    IN: {"!": {var: "Clock_Pulse"}}
-    PT: {var: "One_Second"}
-    output: "Clock_Pulse"
-
-  - name: "Walk_Elapsed"
-    type: "CTUD"
-    note: "Counts seconds since the button was pressed. Reset on Call_Pulse (the origin event), not on Walk_Light_On -- see the note above."
-    CU: {var: "Clock_Pulse"}
-    CD: {var: "Never"}
-    R: {var: "Call_Pulse"}
-    LD: {var: "Never"}
-    load_value: 0
-    PV: {var: "Walk_Time"}
-    output: "Walk_Elapsed"
-
-  - name: "Walk_Timer_Q"
-    type: "ge"
-    expression:
-      ge: [{var: "Walk_Elapsed"}, {var: "Walk_Time"}]
-    output: "Walk_Timer_Q"
-
-  - name: "Walk_Light_On"
-    type: "RS"
-    note: "A pure sink -- nothing reads this back into the logic above, so it's free to be reset by anything."
-    Set: [{var: "Call_Pulse"}]
-    Reset: [{var: "Walk_Timer_Q"}]
-    output: "Walk_Light_On"
-```
-
-Same five sections, same vocabulary, same execution model — nothing elevator-specific was needed to control a completely different system.
