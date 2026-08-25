@@ -26,9 +26,9 @@
   <text class="sub" x="405" y="100" text-anchor="middle">reads THIS scan's Moving,</text>
   <text class="sub" x="405" y="113" text-anchor="middle">writes next Current_Floor</text>
 
-  <path class="edge" d="M 500 85 C 560 85, 560 170, 500 170"/>
-  <text x="530" y="130" class="sub">next</text>
-  <text x="530" y="143" class="sub">scan</text>
+  <path class="edge" d="M 500 85 C 585 85, 585 170, 500 170"/>
+  <text x="620" y="122" class="sub" text-anchor="middle">next</text>
+  <text x="620" y="135" class="sub" text-anchor="middle">scan</text>
 
   <rect class="step" x="310" y="150" width="190" height="60"/>
   <text class="code" x="405" y="175" text-anchor="middle">run_scan(tags)</text>
