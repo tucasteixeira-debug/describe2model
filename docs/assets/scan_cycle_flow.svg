@@ -1,4 +1,4 @@
-<svg viewBox="0 0 900 460" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+<svg viewBox="0 0 920 520" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
@@ -41,33 +41,45 @@
   <text class="sub" x="450" y="208" text-anchor="middle">a valid execution order, computed once</text>
 
   <!-- arrow 3 down -->
-  <path class="arrow" d="M 450 225 L 450 265"/>
+  <path class="arrow" d="M 450 225 L 450 270"/>
 
   <!-- 4. scan cycle loop -->
-  <rect class="box-accent" x="290" y="275" width="320" height="150"/>
-  <text class="title" x="450" y="300" text-anchor="middle">run_scan (repeats every scan)</text>
+  <rect class="box-accent" x="270" y="280" width="490" height="225"/>
+  <text class="title" x="515" y="305" text-anchor="middle">run_scan (repeats every scan)</text>
+  <text class="sub" x="515" y="323" text-anchor="middle">each operation both reads and writes the shared tags dict,</text>
+  <text class="sub" x="515" y="339" text-anchor="middle">evaluated strictly in this order, once per scan</text>
 
-  <rect class="box" x="320" y="315" width="110" height="45"/>
-  <text class="sub" x="375" y="333" text-anchor="middle">evaluate() each</text>
-  <text class="sub" x="375" y="348" text-anchor="middle">operation, in order</text>
+  <!-- op sequence, left to right, one call per operation -->
+  <rect class="box" x="300" y="355" width="70" height="50"/>
+  <text class="sub" x="335" y="385" text-anchor="middle">op 1</text>
+  <path class="arrow" d="M 370 380 L 390 380"/>
 
-  <path class="arrow" d="M 430 337 L 470 337"/>
+  <rect class="box" x="390" y="355" width="70" height="50"/>
+  <text class="sub" x="425" y="385" text-anchor="middle">op 2</text>
+  <path class="arrow" d="M 460 380 L 480 380"/>
 
-  <rect class="box" x="480" y="315" width="110" height="45"/>
-  <text class="sub" x="535" y="333" text-anchor="middle">write each result</text>
-  <text class="sub" x="535" y="348" text-anchor="middle">back into tags</text>
+  <rect class="box" x="480" y="355" width="70" height="50"/>
+  <text class="sub" x="515" y="385" text-anchor="middle">op 3</text>
+  <path class="arrow" d="M 550 380 L 570 380"/>
 
-  <!-- loop back arrow -->
-  <path class="arrow" d="M 590 390 C 630 420, 320 420, 340 390"/>
-  <text class="step-label" x="450" y="412" text-anchor="middle">next scan reads what this scan wrote</text>
+  <text class="sub" x="583" y="385" text-anchor="middle" font-size="16">...</text>
+  <path class="arrow" d="M 596 380 L 610 380"/>
 
-  <!-- shared tags note -->
-  <rect x="30" y="330" width="220" height="80" fill="none" stroke="#999" stroke-dasharray="4 3" rx="6"/>
-  <text class="sub" x="140" y="352" text-anchor="middle" font-weight="600">shared "tags" dict</text>
-  <text class="sub" x="140" y="370" text-anchor="middle">every operation reads and</text>
-  <text class="sub" x="140" y="384" text-anchor="middle">writes here -- this is the</text>
-  <text class="sub" x="140" y="398" text-anchor="middle">only state that persists</text>
+  <rect class="box" x="610" y="355" width="90" height="50"/>
+  <text class="sub" x="655" y="385" text-anchor="middle">op N</text>
 
-  <path class="arrow" d="M 250 370 L 290 350" stroke-dasharray="3 3"/>
+  <!-- return path: results accumulate in tags, right-angle only, no diagonal -->
+  <path class="arrow" d="M 655 405 L 655 460 L 130 460 L 130 440"/>
 
+  <!-- shared tags dict -->
+  <rect x="30" y="350" width="200" height="90" fill="none" stroke="#999" stroke-dasharray="4 3" rx="6"/>
+  <text class="sub" x="130" y="372" text-anchor="middle" font-weight="600">shared "tags" dict</text>
+  <text class="sub" x="130" y="390" text-anchor="middle">every op reads AND writes</text>
+  <text class="sub" x="130" y="406" text-anchor="middle">here -- the only state</text>
+  <text class="sub" x="130" y="422" text-anchor="middle">that persists between scans</text>
+
+  <!-- horizontal arrow, tags into first op, straight -->
+  <path class="arrow" d="M 230 380 L 300 380"/>
+
+  <text class="step-label" x="392" y="483" text-anchor="middle">next scan starts here -- reads exactly what this scan just wrote into tags</text>
 </svg>
