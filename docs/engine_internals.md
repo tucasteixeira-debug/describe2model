@@ -2,6 +2,10 @@
 
 How `engine/` actually runs a YAML file. This is about mechanism, not vocabulary — for what a `TON` or an `RS` *means*, see [`yaml_guide.md`](yaml_guide.md).
 
+![Scan cycle flow](assets/scan_cycle_flow.svg)
+
+A YAML file gets loaded once, sorted into a valid execution order once, and then `run_scan()` re-evaluates every operation, in that order, forever — the same read-decide-act-repeat cycle a real PLC or microcontroller runs on. Everything below is what happens inside that loop.
+
 ## Tags: the world model
 
 There's exactly one piece of shared state in the whole engine: a plain Python `dict` called `tags`. Every input, every constant, every operation's output — the entire condition of the system at this instant — lives in that one dict, and every operation both reads and writes it through nothing but `tags["SomeName"]`.
@@ -42,7 +46,16 @@ Concretely, evaluating `Current_Floor`'s `CU` field —
 
 - **`evaluate.py`** — the recursive expression interpreter above. Pure: given a node and the current `tags`, always returns the same result, no side effects.
 - **`function_blocks.py`** — `R_TRIG`, `TON`, `RS`, `CTUD`, `PID`. Each is a small class holding whatever it needs to remember between scans (`self.elapsed`, `self.counter`, `self.value`...) — real Python state, distinct from anything in `tags`. One instance gets built per operation of that type; `.check(op, tags)` (or `.control_loop()` for `PID`) reads its own fields via `evaluate()`, updates its own internal state, and returns this scan's output.
-- **`topological_sort.py`** — figures out execution order once, before any scan runs (mechanics covered in the YAML guide's cycle-rule section; not repeated here).
+- **`topological_sort.py`** — figures out execution order once, before any scan runs:
+
+```python
+graph = graph_builder(raw_operations)
+order = topological_sorter(graph)
+lookout = build_operation_lookout(raw_operations)
+operations = [lookout[name] for name in order]   # this is what run_scan takes
+```
+
+`graph_builder` walks every operation's fields, finds every `{var: "X"}` reference, and adds a dependency edge if `X` is produced by another operation — self-references are skipped on purpose (why, and what that enables, is in the YAML guide's cycle-rule section). `topological_sorter` turns that graph into a valid order; you never hand-order the YAML file.
 - **`scan_cycle.py`** — everything around a single scan: `load_data()` reads the YAML, `build_initial_tags()`/`seed_operation_outputs()` seed `tags` before scan 1, `build_fb_instances()` builds one function-block object per stateful operation, `run_scan()` is the loop above.
 
 ## Where a physics plant actually hooks in

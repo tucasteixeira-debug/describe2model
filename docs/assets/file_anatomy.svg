@@ -1,0 +1,58 @@
+<svg viewBox="0 0 820 340" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill: #eef2ff; stroke: #33449a; stroke-width: 1.4; rx: 7; }
+    .out { fill: #f4f6f8; stroke: #333; stroke-width: 1.4; rx: 7; }
+    .ext { fill: #fff2e8; stroke: #a85b1f; stroke-width: 1.4; rx: 7; }
+    .title { font-size: 13px; font-weight: 600; fill: #111; }
+    .sub { font-size: 10.5px; fill: #555; }
+    .edge { stroke: #666; stroke-width: 1.4; fill: none; marker-end: url(#a1); }
+  </style>
+
+  <text x="410" y="18" text-anchor="middle" font-size="14" font-weight="600" fill="#111">Where each section's values go</text>
+
+  <!-- runtime_inputs -->
+  <rect class="box" x="30" y="45" width="180" height="55"/>
+  <text class="title" x="120" y="66" text-anchor="middle">runtime_inputs</text>
+  <text class="sub" x="120" y="84" text-anchor="middle">buttons, sensors, plants</text>
+
+  <!-- hmi_configuration -->
+  <rect class="box" x="30" y="115" width="180" height="55"/>
+  <text class="title" x="120" y="136" text-anchor="middle">hmi_configuration</text>
+  <text class="sub" x="120" y="154" text-anchor="middle">fixed params, used in logic</text>
+
+  <!-- physical_constants -->
+  <rect class="box" x="30" y="185" width="180" height="55"/>
+  <text class="title" x="120" y="206" text-anchor="middle">physical_constants</text>
+  <text class="sub" x="120" y="224" text-anchor="middle">used only outside operations</text>
+
+  <!-- operations -->
+  <rect class="out" x="320" y="105" width="180" height="70"/>
+  <text class="title" x="410" y="132" text-anchor="middle">operations</text>
+  <text class="sub" x="410" y="150" text-anchor="middle">the control logic itself</text>
+  <text class="sub" x="410" y="163" text-anchor="middle">(what this guide covers)</text>
+
+  <!-- outputs -->
+  <rect class="out" x="580" y="105" width="180" height="70"/>
+  <text class="title" x="670" y="132" text-anchor="middle">outputs</text>
+  <text class="sub" x="670" y="150" text-anchor="middle">every tag an operation</text>
+  <text class="sub" x="670" y="163" text-anchor="middle">writes to</text>
+
+  <!-- external code -->
+  <rect class="ext" x="320" y="225" width="180" height="65"/>
+  <text class="title" x="410" y="250" text-anchor="middle">external Python code</text>
+  <text class="sub" x="410" y="268" text-anchor="middle">a physics plant, a script --</text>
+  <text class="sub" x="410" y="280" text-anchor="middle">never an operation</text>
+
+  <path class="edge" d="M 210 72 L 320 130"/>
+  <path class="edge" d="M 210 142 L 320 145"/>
+  <path class="edge" d="M 210 212 L 320 250"/>
+  <path class="edge" d="M 500 140 L 580 140"/>
+
+  <path class="edge" d="M 670 105 C 670 34, 410 34, 410 105" stroke-dasharray="3 3"/>
+  <text class="sub" x="560" y="30" text-anchor="middle">outputs can feed back into later operations</text>
+</svg>

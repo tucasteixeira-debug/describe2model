@@ -1,0 +1,36 @@
+<svg viewBox="0 0 820 300" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a83232"/>
+    </marker>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#227722"/>
+    </marker>
+  </defs>
+  <style>
+    .code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 15px; fill: #111; }
+    .lbl { font-size: 12px; fill: #444; }
+    .bad { fill: #fdecec; stroke: #a83232; stroke-width: 1.4; rx: 7; }
+    .good { fill: #eafaea; stroke: #227722; stroke-width: 1.4; rx: 7; }
+  </style>
+
+  <text x="410" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#111">Every field value is a JsonLogic node -- a dict with exactly one key</text>
+
+  <!-- wrong -->
+  <rect class="bad" x="60" y="55" width="300" height="70"/>
+  <text x="335" y="72" text-anchor="end" font-size="12" font-weight="700" fill="#a83232">WRONG</text>
+  <text class="code" x="80" y="100">PT: 4</text>
+  <text class="lbl" x="210" y="145" text-anchor="middle">bare literal -- crashes at load time</text>
+
+  <!-- right -->
+  <rect class="good" x="460" y="55" width="300" height="70"/>
+  <text x="735" y="72" text-anchor="end" font-size="12" font-weight="700" fill="#227722">RIGHT</text>
+  <text class="code" x="480" y="100">PT: {var: "Hold_Time"}</text>
+  <text class="lbl" x="610" y="145" text-anchor="middle">wrapped node, backed by hmi_configuration</text>
+
+  <!-- the one exception -->
+  <rect x="60" y="190" width="700" height="90" fill="none" stroke="#999" stroke-dasharray="4 3" rx="8"/>
+  <text class="lbl" x="410" y="215" text-anchor="middle" font-weight="600">The one exception: load_value on a CTUD</text>
+  <text class="code" x="410" y="240" text-anchor="middle">load_value: 0</text>
+  <text class="lbl" x="410" y="262" text-anchor="middle">a bare literal is correct here -- this single field is not a JsonLogic node</text>
+</svg>
