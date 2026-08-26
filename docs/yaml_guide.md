@@ -1,15 +1,25 @@
 # The YAML Guide
 
-The idea is to use a plain data structure — big dictionaries containing lists — to describe an industrial control operation with a fixed set of rules, so that an engine can always process and interpret anything written in it. Underneath that is a simple premise: any real system is built out of a finite amount of fundamental-level operations and vocabulary, and that's exactly what this format exploits. It's actually how PLC systems already work — this just makes that structure explicit, and pushes it further into an honestly logic-driven description rather than a procedural one.
+The idea is to use a plain data structure — dictionaries containing lists — to describe an industrial control operation using a fixed set of rules, so that an engine can consistently process and interpret anything written in it.
 
-The engine then takes that finite vocabulary and, with a genuinely simple algorithm, runs it at real speed — that mechanism is covered in [`engine_internals.md`](engine_internals.md), not here. This guide is about the description itself: the three design decisions that shape it are a syntax simple enough for the engine to process without ambiguity, how a file is structured, and which vocabulary of fundamental operations it's built from. That's the order this guide follows — starting with the syntax, since it's what every file and every operation is actually written in.
+The premise underneath is simple: any real system is built from a finite set of fundamental operations and a finite vocabulary for expressing them. This format makes that structure explicit. In a sense, it is already how PLC systems work — this simply pushes that structure further, making the logic itself a declarative description rather than a procedural program.
+
+The engine takes that finite vocabulary and, with a deliberately simple algorithm, executes it at real speed — that mechanism is covered in [`engine_internals.md`](engine_internals.md), not here. This guide is about the description itself: the three design decisions that shape it are **a syntax simple enough to process without ambiguity, a clear file structure, and a finite vocabulary of fundamental operations**.
+
+That's the order this guide follows — starting with the syntax, since it is what every file and every operation is ultimately written in.
 
 
 ## Syntax
 
-Before anything else, it's worth seeing how an operation is actually written, because the file structure and the vocabulary below are both just this one rule, applied over and over.
+Before anything else, it is worth seeing how an operation is actually written, because the file structure and the vocabulary described below are both just this one rule, applied repeatedly.
 
-The core idea: every field value is a **JsonLogic node — a dict with exactly one key** — and that key's value is either a plain literal or another node. This is deliberately recursive, and that's the actual design decision worth naming: a dict can hold a list, that list can hold more dicts, each of those can hold more lists, as deep as the real decision needs to go. There's no separate expression grammar bolted on top of YAML — the recursive shape of a dictionary containing a list containing dictionaries *is* the language, which is exactly how you'd naturally write "the AND of these conditions, one of which is itself a comparison" if you were describing it in plain terms. The engine doesn't need a custom parser because of this; it just needs to know how to walk a dict and a list.
+The core idea is that every field value is a **JsonLogic node — a dictionary with exactly one key** — and that key's value is either a plain literal or another node.
+
+This is deliberately recursive, and that is the design decision worth making explicit: a dictionary can contain a list, that list can contain more dictionaries, and those dictionaries can contain more lists, to whatever depth the decision requires.
+
+There is no separate expression grammar bolted on top of YAML. The recursive shape of a dictionary containing a list containing dictionaries *is* the language. It is exactly the structure you would naturally arrive at when describing something like “the AND of these conditions, one of which is itself a comparison.”
+
+The engine therefore does not need a custom parser. It only needs to know how to walk a dictionary and a list.
 
 Concretely:
 
@@ -17,7 +27,7 @@ Concretely:
 {gt: [{var: "Target_Floor"}, {var: "Current_Floor"}]}
 ```
 
-is a dict with one key (`gt`), whose value is a list of two elements, each of which is itself a dict with one key (`var`). Three levels of nesting, three nodes, and every level is read the same way: look at the one key, do what it says, recurse into whatever's inside it.
+is a dictionary with one key (`gt`), whose value is a list of two elements, each of which is itself a dictionary with one key (`var`). Three levels of nesting, three nodes, and every level is read the same way: look at the one key, do what it says, and recurse into whatever is inside it.
 
 | Key | Shape | Meaning |
 |---|---|---|
@@ -28,9 +38,16 @@ is a dict with one key (`gt`), whose value is a list of two elements, each of wh
 | `if` | `{if: [condition, then, else]}` | exactly 3 elements, ternary |
 | `+` / `-` | `{"+": [a, b]}` | exactly 2 elements |
 
-Comparison and arithmetic operators accept either a nested node *or* a bare literal in each of their two slots — `{gt: [{var: "X"}, 5]}` is fine. The one thing that's never allowed is a bare literal as the field itself: `PT: 4` will crash, because `4` isn't a node at all — it has to be `PT: {var: "Some_Tag"}`, backed by an `hmi_configuration` entry. This is the single most common mistake when writing new YAML. `load_value` (on a `CTUD`) is the one deliberate exception — its value really is meant to be a plain number, not a computed condition.
+Comparison and arithmetic operators accept either a nested node or a bare literal in each of their two slots — `{gt: [{var: "X"}, 5]}` is fine.
 
-There's no `max` or `abs` primitive — both get built from `if`/`gt`/`-` when needed. See the CUSUM accumulator in [`engine_internals.md`](engine_internals.md) for a real, worked example of that.
+The one thing that is never allowed is a bare literal as the field itself: `PT: 4` will crash, because `4` is not a node. It has to be `PT: {var: "Some_Tag"}`, backed by an `hmi_configuration` entry.
+
+This is the single most common mistake when writing new YAML.
+
+`load_value` on a `CTUD` is the one deliberate exception — its value really is meant to be a plain number rather than a computed condition.
+
+There is no `max` or `abs` primitive — both can be constructed from `if` / `gt` / `-` when needed. See the CUSUM accumulator in [`engine_internals.md`](engine_internals.md) for a real worked example of that.
+
 
 ## Anatomy of a system file
 
@@ -66,12 +83,16 @@ outputs:
   Moving: {type: BOOL}
 ```
 
-One distinction worth being precise about:
+One distinction is worth being precise about:
 
+- **`runtime_inputs` isn't just “user-facing buttons.”** Anything written every scan by code outside the operations graph belongs here. A physics plant's position output counts exactly the same as a button press. The engine does not distinguish between the two; both are external signals that never get a producer edge in the dependency graph.
 
-- **`runtime_inputs` isn't just "user-facing buttons."** Anything written every scan by code outside the operations graph belongs here — a physics plant's position output counts exactly the same as a button press. The engine doesn't distinguish the two; both are external signals that never get a producer edge in the dependency graph. That distinction is what makes certain structural upgrades possible at all — see the cycle-detection section of [`engine_internals.md`](engine_internals.md).
+That distinction is what makes certain structural upgrades possible at all — see the cycle-detection section of [`engine_internals.md`](engine_internals.md).
 
-`type: BOOL` seeds `False`; anything else seeds `0.0`. An `hmi_configuration` entry with no `default` still runs, but gets a placeholder value and a load-time warning — a deliberate surfacing of an unconfirmed assumption, not a bug.
+`type: BOOL` seeds `False`; anything else seeds `0.0`.
+
+An `hmi_configuration` entry with no `default` still runs, but receives a placeholder value and a load-time warning — a deliberate surfacing of an unconfirmed assumption, rather than a hidden failure.
+
 
 ## Vocabulary and operations
 
@@ -79,19 +100,25 @@ Every entry in `operations` is one of two kinds.
 
 ![Every operation is one of two kinds](assets/vocabulary_categories.svg)
 
-**Stateless** (`and`, `or`, `!`, `gt`, `lt`, `ge`, `le`, `eq`, `if`, `+`, `-`, `wiring`) — has an `expression` field, one JsonLogic tree, recomputed fresh every scan with no memory of its own. (`wiring` is the same mechanism, used as a semantic label for a plain signal pass-through/relabel rather than any real computation.)
+**Stateless** (`and`, `or`, `!`, `gt`, `lt`, `ge`, `le`, `eq`, `if`, `+`, `-`, `wiring`) — has an `expression` field: one JsonLogic tree, recomputed fresh every scan with no memory of its own. (`wiring` uses the same mechanism, but acts as a semantic label for a plain signal pass-through or relabel rather than a computation.)
 
-**Function blocks** (`R_TRIG`, `TON`, `RS`, `CTUD`, `PID`) — carry memory between scans, and have their own named fields instead of a generic `expression`. This vocabulary isn't arbitrary: `R_TRIG`, `TON`, `RS`, and `CTUD` are named directly after their equivalents in IEC 61131-3, the international standard that defines how real PLCs are programmed — this format is heavily based on that same standard function-block vocabulary, not a new invention. `PID` isn't part of the core IEC 61131-3 block list itself, but it's the near-universal standard-library block every real PLC platform ships for exactly the same control-loop role used here.
+**Function blocks** (`R_TRIG`, `TON`, `RS`, `CTUD`, `PID`) — carry memory between scans and have their own named fields rather than a generic `expression`.
 
-- **R_TRIG** — rising-edge detector. Field: `IN`. Outputs `True` for exactly one scan when `IN` goes False→True.
-- **TON** — on-delay timer. Fields: `IN`, `PT` (preset time, seconds). Elapsed accumulates while `IN` is true, resets to 0 the instant `IN` goes false. Output is `elapsed >= PT`; it does not auto-reset once reached.
+This vocabulary is not arbitrary. `R_TRIG`, `TON`, `RS`, and `CTUD` are named directly after their equivalents in IEC 61131-3, the international standard for programmable controller programming. The format deliberately builds on that same function-block vocabulary rather than inventing a new one.
+
+`PID` is not part of the core IEC 61131-3 block list itself, but it is a near-universal standard-library block across real PLC platforms, serving the same control-loop role here.
+
+- **R_TRIG** — rising-edge detector. Field: `IN`. Outputs `True` for exactly one scan when `IN` goes False → True.
+- **TON** — on-delay timer. Fields: `IN`, `PT` (preset time, seconds). Elapsed accumulates while `IN` is true and resets to 0 the instant `IN` goes false. Output is `elapsed >= PT`; it does not auto-reset once reached.
 - **RS** — Set/Reset latch, Reset-dominant. Fields: `Set` (list, OR'd), `Reset` (list, OR'd).
-- **CTUD** — up/down counter. Fields: `CU`, `CD` (count up/down on rising edge), `R` (reset), `LD` (load), `load_value` (the syntax exception above), `PV` (preset/max). Clamped to `[0, PV]`; precedence when several fire the same scan is R beats LD beats CU/CD.
-- **PID** — Fields: `MANUAL`, `Y_MANUAL`, `RESET`, `KP`, `TN`, `TV`, `Y_MIN`, `Y_MAX`, `SET_POINT`, `ACTUAL`. `Y = KP * (error + I/TN + TV*de/dt)` — `KP` scales the whole sum, not just the P term. Anti-windup is back-calculation, so recovery after a long saturation isn't slow. Not exercised anywhere in the elevator example (a discrete-floor dispatch problem has no continuous setpoint to track), but it's part of the vocabulary for anything that does — a temperature loop, a flow-rate controller.
+- **CTUD** — up/down counter. Fields: `CU`, `CD` (count up/down on rising edge), `R` (reset), `LD` (load), `load_value` (the syntax exception above), `PV` (preset/max). Clamped to `[0, PV]`; precedence when several fire in the same scan is R beats LD beats CU/CD.
+- **PID** — Fields: `MANUAL`, `Y_MANUAL`, `RESET`, `KP`, `TN`, `TV`, `Y_MIN`, `Y_MAX`, `SET_POINT`, `ACTUAL`. `Y = KP * (error + I/TN + TV*de/dt)` — `KP` scales the whole sum, not just the P term. Anti-windup is back-calculation, so recovery after a long saturation is not unnecessarily slow. It is not exercised anywhere in the elevator example (a discrete-floor dispatch problem has no continuous setpoint to track), but it is part of the vocabulary for systems that do — a temperature loop, a flow-rate controller, and so on.
 
-Every operation needs `name` (unique), `type`, and `output` (the tag it writes to). `note` and `source` are optional free-text metadata — worth using generously, since a `note` explaining *why* something is written the way it is (especially anything that looks unusual) is what makes a YAML file readable months later.
+Every operation needs `name` (unique), `type`, and `output` (the tag it writes to).
 
-A **self-oscillating pulse**, real snippet from `example/Elevator_System_1/elevator_1.yaml` — worth seeing once, because the idiom isn't obvious from the field list alone:
+`note` and `source` are optional free-text metadata. They are worth using generously: a `note` explaining *why* something is written the way it is — especially anything that looks unusual — is what makes a YAML file readable months later.
+
+A **self-oscillating pulse**, from `example/Elevator_System_1/elevator_1.yaml`, is worth seeing once because the idiom is not obvious from the field list alone:
 
 ```yaml
 - name: "Travel_Pulse"
@@ -104,9 +131,11 @@ A **self-oscillating pulse**, real snippet from `example/Elevator_System_1/eleva
   output: "Travel_Pulse"
 ```
 
-Gating `IN` on the block's own negated output makes it fire, which makes `!Travel_Pulse` go false next scan, resetting elapsed, letting it fire again — a periodic pulse built from one timer and one self-reference, no separate oscillator needed. (It's periodic, but not uniformly periodic at `PT` — every pulse after the first is `PT + 1` scans apart, a real, measured quirk of the idiom worth knowing before relying on exact timing.)
+Gating `IN` on the block's own negated output makes it fire, which makes `!Travel_Pulse` go false on the next scan, resetting elapsed and allowing it to fire again — a periodic pulse built from one timer and a self-reference, with no separate oscillator required.
 
-And a real `RS` + `CTUD` pair, `example/Elevator_System_1/elevator_1.yaml`, showing the field shapes above in context:
+It is periodic, but not uniformly periodic at `PT`: every pulse after the first is `PT + 1` scans apart. That is a real, measured quirk of the idiom, and worth knowing before relying on exact timing.
+
+And a real `RS` + `CTUD` pair, from `example/Elevator_System_1/elevator_1.yaml`, shows the field shapes above in context:
 
 ```yaml
 - name: "Doors_Open"
@@ -134,15 +163,19 @@ And a real `RS` + `CTUD` pair, `example/Elevator_System_1/elevator_1.yaml`, show
   output: "Current_Floor"
 ```
 
+
 ## Naming and documentation conventions
 
 - Operation names: `PascalCase`, descriptive of *what* they compute, not *how* (`Doors_Open`, not `RS_Latch_3`).
-- Every operation that isn't self-explanatory gets a `note` explaining *why* — especially anything unusual: a self-reference, a deliberately-dropped check, a known simplification.
-- Section comments (`# --- Dispatch ---`) group operations by concept for human readability. They carry no meaning to the engine — pure documentation.
+- Every operation that isn't self-explanatory gets a `note` explaining *why* — especially anything unusual: a self-reference, a deliberately dropped check, or a known simplification.
+- Section comments (`# --- Dispatch ---`) group operations by concept for human readability. They carry no meaning to the engine — they are pure documentation.
+
 
 ## A more complex operation, in full
 
-Every example so far was small enough to read in one glance. It's worth seeing what the same syntax looks like once a real decision gets genuinely complicated, because that's where the recursive design actually earns its keep. `Target_Floor`, in `example/Elevator_System_2/elevator_2.yaml`, is the operation that picks which floor the car should go to next — real LOOK-algorithm dispatch: find the nearest pending call in the car's current direction of travel, or stay put if there isn't one:
+Every example so far was small enough to read in one glance. It is worth seeing what the same syntax looks like once a real decision becomes genuinely complicated, because that is where the recursive design actually earns its keep.
+
+`Target_Floor`, in `example/Elevator_System_2/elevator_2.yaml`, is the operation that picks which floor the car should go to next — a real LOOK-algorithm dispatch: find the nearest pending call in the car's current direction of travel, or stay put if there isn't one:
 
 ```yaml
 - name: "Target_Floor"
@@ -185,7 +218,12 @@ Every example so far was small enough to read in one glance. It's worth seeing w
   output: "Target_Floor"
 ```
 
-Nothing new is happening here syntactically — it's the exact same `if` / `and` / `gt` / `var` vocabulary from the table above, just nested six levels deep instead of two. Read it one level at a time: *if going up, check whether floor 1 has a call above the car and pick it; if not, check floor 2; if not, floor 3; and so on, falling back to the car's own current floor if nothing is pending in that direction at all.* The down direction, in the second branch, is the mirror image.
+Nothing new is happening here syntactically — it is the exact same `if` / `and` / `gt` / `var` vocabulary from the table above, just nested six levels deep instead of two.
 
-There's no loop anywhere, and no dedicated "find the nearest floor" primitive exists in the vocabulary at all — the entire search is just one `if` calling into another `if`, six times over. That's precisely the recursive shape from the Syntax section above, `{gt: [{var: "X"}, {var: "Y"}]}`, just deep enough that the pattern stops being trivial and starts doing real work: the same handful of dict-and-list rules, scaled up, is enough to express a genuine dispatch algorithm.
+Read it one level at a time: *if going up, check whether floor 1 has a call above the car and pick it; if not, check floor 2; if not, floor 3; and so on, falling back to the car's own current floor if nothing is pending in that direction at all.* The down direction, in the second branch, is the mirror image.
 
+There is no loop anywhere, and no dedicated “find the nearest floor” primitive exists in the vocabulary at all. The entire search is just one `if` calling into another `if`, six times over.
+
+That is precisely the recursive shape from the Syntax section above, `{gt: [{var: "X"}, {var: "Y"}]}`, extended far enough that the pattern stops being trivial and starts doing real work.
+
+The same handful of dictionary-and-list rules, scaled up, is enough to express a genuine dispatch algorithm.
