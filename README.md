@@ -1,6 +1,6 @@
 # describe2model
 
-Describe an industrial control system in plain language and turn it into a working, simulatable model — without first having to formalize it in a rigid technical environment.
+Turn an understanding of an industrial control system into an executable model — through a small declarative language and a modular simulation architecture.
 
 ## Why I built this
 
@@ -10,47 +10,49 @@ Iteration is essentially a loop:
 
 **idea / hypothesis → information → refined idea / hypothesis → information → ...**
 
-That information is more than just validation. It means understanding how the system actually behaves: how its different parts interact, how outcomes can be traced through those interactions, what each building block contributes, the subtleties in their behaviour, the physical processes underneath the logic, its robustness and edge cases, and the consequences of changing something.
+That information is more than validation. It means understanding how the system actually behaves: how its parts interact, how outcomes can be traced through those interactions, what each building block contributes, the subtleties in its behaviour, the physical processes beneath the logic, its robustness and edge cases, and the consequences of changing something.
 
 For effective iteration, the rate at which you can generate ideas should be matched by the rate at which you can generate information about them. That is what makes simulation so powerful.
 
-During an internship working with real industrial control systems, I ran into this problem directly. Understanding the system — conceptually, logically, and physically — was rarely the hard part. The bottleneck was getting from that understanding to something I could quickly interrogate and learn from.
+During an internship working with real industrial control systems, I encountered this problem directly. Understanding a system — conceptually, logically, and physically — was rarely the hardest part. The bottleneck was getting from that understanding to something executable that I could quickly interrogate, test, and learn from.
 
-There was a lot in the way: dense technical documentation, PLC programming languages, functional descriptions, vendor-specific tooling, and simulation workflows constrained by rigid logic and predefined structure.
+A great deal stood in between: dense technical documentation, PLC programming languages, functional descriptions, vendor-specific tooling, and simulation workflows constrained by rigid logic and predefined structure.
 
-Even when the system was conceptually understood, getting useful information out of it could still be slow.
+Even when the system was conceptually understood, turning that understanding into useful information could still be slow.
 
 `describe2model` is an attempt to close that gap.
 
-The method is specifically motivated by industrial control systems, but the underlying idea is broader: **make models flexible enough that they can keep up with the process of understanding and developing the system itself.**
+The method is specifically motivated by industrial control systems, but the underlying idea is broader: **make the path from understanding a system to executing a representation of it short enough that the model can evolve with the understanding itself.**
 
 ## How it works
 
-You describe a system in plain language, then use a small set of documented translation rules to turn that description into a declarative graph — a YAML file containing named operations and the data they depend on.
+A system is first described in plain language, then translated through a small set of documented rules into a declarative graph — a YAML file containing named operations and the data they depend on.
 
-The engine takes it from there. It topologically sorts the operations into the correct execution order and evaluates them scan-by-scan, mirroring the way a real PLC continuously re-evaluates its logic.
+The engine takes it from there. It derives the dependency graph, resolves the operations into a valid execution order, and evaluates them scan by scan, following the same repeated read–decide–act structure that underlies PLC execution.
 
-The goal isn't simply to *“translate English into PLC logic.”* By representing a system as a declarative graph rather than hard-coded procedural logic, `describe2model` makes the simulation itself flexible.
+The goal is not simply to *translate English into PLC logic*. The more important choice is to represent the system as a declarative graph rather than as hard-coded procedural logic.
 
-You can swap a physics model in where a sensor used to be, add a new rule without restructuring the rest of the system, or iterate on the design without assuming that the underlying structure has to be fixed from the beginning.
+That representation gives the model room to evolve.
 
-That modularity isn't just an architectural nicety — it's the actual point. A better simulation is more information, and more information is what turns the next idea into something you can test, not just something you can reason about.
+A placeholder can become a physical model. New behaviour can be introduced without restructuring unrelated logic. New information can be derived from signals the system already exposes. The representation does not need to be discarded each time the question being asked of the system becomes richer.
 
-A placeholder becoming a real physics plant, a physics plant later feeding a monitoring layer, a monitoring layer eventually informed by something like ML — each of those is capability added on top of the same graph, not a rebuild.
+That modularity is not merely an architectural convenience — it is the point. A better model produces better information, and better information is what allows the next idea to be tested rather than only reasoned about.
+
+The examples in this repository make that progression concrete: control logic becomes coupled to physical behaviour, and that physical behaviour later becomes the basis for a monitoring layer. Each stage asks more of the model while preserving the same underlying execution architecture.
 
 ## Where to go from here
 
-- **[`docs/`](docs/)** — the technical deep dive: the YAML format, the expression syntax, and how the engine actually executes a file, scan by scan. This is where the mechanism behind the idea above is explained in full.
-- **[`example/`](example/)** — the idea in practice, not just in theory. A single elevator, taken through three stages of increasingly sophisticated requirements, each a genuine upgrade rather than a rebuild — this is where you can actually see the modularity the pitch above is about. Each stage has its own description and its own documentation.
+- **[`docs/`](docs/)** — the technical foundation: the YAML representation, its expression syntax, and the mechanisms by which the engine interprets and executes a system scan by scan.
+- **[`example/`](example/)** — the architecture as a proof of concept. A single elevator is taken through three progressively richer modelling requirements, making the effect of each new source of information visible in a working simulation.
 
-If you want to run it yourself rather than just read about it: Python 3.9+, `pip install pyyaml matplotlib`, then `cd` into any stage's folder and run its `run_simulationN.py`.
+If you want to run the examples yourself: Python 3.9+, `pip install pyyaml matplotlib`, then `cd` into any elevator stage and run its corresponding `run_simulationN.py`.
 
 ## Status
 
-Early stage. The core engine — dependency-graph parsing, topological sorting, and scan-cycle evaluation — is working.
+Early stage. The core engine — declarative expression evaluation, dependency-graph construction, topological ordering, stateful function blocks, and scan-cycle execution — is working.
 
-A worked toy example, the full translation-rules guide, and setup instructions are currently in progress.
+The repository currently includes the translation guide, engine documentation, and a three-stage worked example demonstrating the architecture from control logic through physical simulation and condition monitoring.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [`LICENSE`](LICENSE).
