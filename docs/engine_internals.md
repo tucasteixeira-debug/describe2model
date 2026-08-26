@@ -1,34 +1,62 @@
 # Engine Internals
 
-How `engine/` actually runs a YAML file. This is about mechanism, not vocabulary — for what a `TON` or an `RS` *means*, see [`yaml_guide.md`](yaml_guide.md).
+This is how `engine/` turns a YAML description into an executing system.
 
-While the YAML — the declarative part of this project — is about describing a system using a finite set of fundamental operations and knowns, the engine is the modular software able to process anything written in that set of rules and turn it into a working simulation. The diagram below is the working principle behind that; the rest of this document walks through it piece by piece.
+The YAML side of the project rests on the idea that a system can be expressed through a finite vocabulary of fundamental operations and known values. The engine is the corresponding computational half: a small, modular interpreter capable of taking anything validly expressed in that vocabulary and making it execute.
+
+The diagram below captures the whole principle. The rest of this document takes it apart piece by piece.
 
 ![Scan cycle flow](assets/scan_cycle_flow.svg)
 
-A YAML file gets loaded once, sorted into a valid execution order once, and then `run_scan()` re-evaluates every operation, in that order, forever — the same read-decide-act-repeat cycle a real PLC or microcontroller runs on.
+A YAML file is loaded once, resolved into a valid execution order once, and then `run_scan()` evaluates every operation in that order, scan after scan — the same read-decide-act-repeat rhythm at the heart of a PLC or microcontroller.
 
-## `evaluate()`: the same principle, made mechanical
 
-The YAML guide's Syntax section makes a design claim: any real system can be described as a finite set of fundamental-level operations, built entirely out of recursive dicts and lists. `evaluate()` is where that claim actually gets exploited, not just asserted — it's the elegant part of this engine precisely because it takes that fact at face value. There's no separate step that "parses" a JsonLogic expression before running it: `evaluate(node, tags)` *is* the interpreter. It looks at one dict's single key, and either returns a value directly (`var`, the base case) or calls itself on whichever sub-nodes that key implies (`and`, `gt`, `if`, ...). An arbitrarily nested expression gets walked correctly with no explicit stack, no tree-building pass, nothing but the Python call stack doing the recursion for free — because the language *is* recursive dicts and lists, the interpreter can just recurse on dicts and lists.
+## `evaluate()`: making the representation executable
+
+The Syntax section of the YAML guide makes a design claim: arbitrarily complex logic can be constructed from a small set of fundamental operations arranged as recursive dictionaries and lists.
+
+`evaluate()` is where that claim stops being descriptive and becomes computational.
+
+There is no intermediate stage that first translates a JsonLogic expression into some second internal language. `evaluate(node, tags)` *is* the interpreter. It examines the single key of one dictionary and either resolves a value directly (`var`, the base case) or recursively evaluates whatever sub-nodes that operation contains (`and`, `gt`, `if`, ...).
+
+That correspondence is the important part. Because the language itself is recursive, its interpreter can be recursive too.
+
+An expression of arbitrary depth therefore requires no explicit stack, no separate tree-building pass, and no special knowledge of how deeply it is nested. The Python call stack supplies the traversal naturally: dictionaries contain lists, lists contain dictionaries, and `evaluate()` simply follows the same structure until it reaches a value.
 
 ![evaluate() recursion](assets/evaluate_recursion.svg)
 
-Concretely, evaluating `Current_Floor`'s `CU` field —
+Concretely, consider `Current_Floor`'s `CU` field:
 
 ```python
 {and: [{var: "Travel_Pulse"}, {gt: [{var: "Target_Floor"}, {var: "Current_Floor"}]}]}
 ```
 
-— is one call to `evaluate()`, which sees `and`, and calls `evaluate()` again on each of its two elements; the second of those sees `gt` and calls `evaluate()` twice more on `var` nodes, which are the base case (a direct `tags[...]` lookup, no further recursion). Four calls total, one function, correct for expressions of any depth without the function needing to know how deep they'll go — the six-level `Target_Floor` dispatch tree in the YAML guide runs through this exact same function, unchanged.
+Evaluating it begins with one call to `evaluate()`. That call sees `and` and evaluates its two children. The second child sees `gt` and evaluates two more children; both are `var` nodes, the base case, resolved directly through `tags[...]`.
 
-`topological_sort.py`'s `collect_vars()` uses the exact same shape of recursion for a different purpose: instead of *computing* a value, it walks the same kind of tree to *discover every tag name referenced inside it*, so `graph_builder()` knows what an operation depends on. Same recursive tree-walk, two different jobs — evaluate a tree, or inventory a tree.
+Four calls in total. One function.
+
+Nothing about that function changes when the expression becomes deeper. The six-level `Target_Floor` dispatch tree from the YAML guide passes through exactly the same mechanism.
+
+`topological_sort.py`'s `collect_vars()` exploits the same structural property for a completely different purpose. Instead of traversing the tree to *compute* its value, it traverses it to *discover every tag referenced inside it*, allowing `graph_builder()` to determine what an operation depends on.
+
+The representation remains the same; only the question asked of it changes.
+
+One recursive tree can therefore support both execution and structural analysis: **evaluate the tree, or inventory the tree.**
+
 
 ## Tags: the world model
 
-There's exactly one piece of shared state in the whole engine: a plain Python `dict` called `tags`. Every input, every constant, every operation's output — the entire condition of the system at this instant — lives in that one dict, and every operation both reads and writes it through nothing but `tags["SomeName"]`.
+There is exactly one piece of shared state in the engine: a plain Python dictionary called `tags`.
 
-That sounds almost too simple to be worth naming, but it's the actual design: the engine doesn't model "the elevator" or "the traffic light" as an object with methods. It models a world as a dictionary of named values, and a list of small functions that each read a few keys and write one key, run in sequence. Real complexity comes from having *many* of these small operations, not from any one of them being clever — `run_scan()` (in `scan_cycle.py`) is a five-line loop:
+Every input, every constant, and every operation output — the entire observable condition of the simulated system at a particular instant — exists in that dictionary. Operations interact with the system by reading and writing named values through `tags["SomeName"]`.
+
+Its simplicity is deliberate.
+
+The engine does not contain an object representing “the elevator” or “the traffic light,” equipped with domain-specific methods and behaviour. Instead, it represents a world as a set of named values and a sequence of small operations, each of which reads some subset of those values and writes one result back.
+
+Complexity therefore emerges from the composition of many simple operations, rather than being concentrated inside a single clever one.
+
+At the centre of the engine, `run_scan()` in `scan_cycle.py` is little more than this:
 
 ```python
 def run_scan(operations, fb_instances, tags):
@@ -42,13 +70,26 @@ def run_scan(operations, fb_instances, tags):
         tags[op["output"]] = result
 ```
 
-A whole elevator's dispatch, motion gating, and door sequencing is this loop running ~30 times over a list of ~30 tiny operations, once per scan, rather than one large function trying to decide everything at once. That's a deliberate trade: many small, independently-readable steps over shared state, instead of one big procedure — the same reason ladder logic and structured text are built out of small rungs/statements rather than monolithic routines.
+An entire elevator's dispatch, motion gating, and door sequencing emerges from this loop passing over roughly thirty small operations every scan, rather than from one large procedure attempting to decide the system's behaviour as a whole.
 
-One distinction worth keeping straight: `tags` is the *only* state that persists across scans in a way the YAML controls. Function blocks (`function_blocks.py`) additionally keep their own small pocket of private Python state — `self.elapsed` on a `TON`, `self.counter` on a `CTUD` — held in one object per stateful operation, built once by `build_fb_instances()`. That state is real and it does persist, but it's invisible to the declarative graph; the only thing any operation can ever read from another operation is what that operation chose to write into `tags`.
+That is a deliberate trade: **many small, independently readable transformations over shared state instead of one monolithic procedure.** It is also recognisably close to the structure of PLC programming itself, where behaviour is assembled from individual rungs, statements, and function blocks rather than hidden inside one central routine.
 
-## Topological sort: solving for a valid order once
+One distinction matters here. `tags` is the only state that persists across scans *under declarative control*. Stateful function blocks in `function_blocks.py` also maintain small pieces of private Python state — `self.elapsed` for a `TON`, `self.counter` for a `CTUD` — stored in one object per stateful operation and constructed once by `build_fb_instances()`.
 
-The YAML is written in whatever order reads best to a human, which means the engine has to work out a valid execution order itself before running anything — this is a real design choice, not an incidental detail, because without it a scan is only correct if `Doors_Open` happens to be evaluated after everything it depends on.
+That state is real and persistent, but it is intentionally private. It does not become another communication channel through the system. The only information one operation can observe from another is the value that operation deliberately exposes through `tags`.
+
+The distinction keeps the declarative graph legible even when its individual blocks carry memory.
+
+
+## Topological sort: solving the execution order once
+
+The YAML is written in whatever order best communicates the system to a human. The engine therefore has to derive the order required by the computation.
+
+This is not an implementation convenience. It is what allows presentation order and execution order to be independent.
+
+Without it, a scan would only be correct if an operation such as `Doors_Open` happened to appear after every operation whose output it reads. The author would be manually encoding dependencies through file position — information the expressions themselves already contain.
+
+Instead, the engine extracts those dependencies and solves the ordering problem once.
 
 ![Topological sort](assets/topological_sort.svg)
 
@@ -59,19 +100,70 @@ lookout = build_operation_lookout(raw_operations)
 operations = [lookout[name] for name in order]   # this is what run_scan takes
 ```
 
-`graph_builder` walks every operation's fields with the same recursive tree-walk from above, finds every `{var: "X"}` reference, and adds a dependency edge if `X` is produced by another operation — self-references are skipped on purpose, which is the whole subject of the next section. Function blocks don't share one field name for their logic the way stateless operations do (`RS` uses `Set`/`Reset`, `CTUD` uses `CU`/`CD`/`R`/`LD`, `TON` uses `IN`/`PT`), so `collect_operation_vars` can't assume where to look — it walks every field on an operation except a small fixed set of metadata keys (`name`, `type`, `output`, `note`, `source`, `load_value`) and collects whatever tag references turn up, regardless of which fields happen to hold them. The result is a plain dict: `{operation_name: [names of operations it depends on]}`.
+`graph_builder()` walks every operation using the same recursive traversal described above, finds each `{var: "X"}` reference, and creates a dependency edge whenever `X` is produced by another operation. Self-references are deliberately excluded; that exception deserves its own section below.
 
-`topological_sorter` itself isn't a hand-rolled algorithm — it's a thin wrapper around Python's own standard library, `graphlib.TopologicalSorter`, built for exactly this job. It's worth being precise about what `static_order()` is actually doing, since "it sorts it" undersells it: every node starts out waiting on however many not-yet-emitted dependencies it has; the moment a node's remaining count hits zero it becomes *ready* and gets emitted; emitting it then lowers the count for everything that depended on it, which can make more nodes ready in turn. That repeats until every node's been emitted, in an order where nothing is ever emitted before something it depends on. A genuine cycle is exactly the case where some subset of nodes can never reach a zero count — each is still waiting on another member of the same subset — so nothing in that subset ever becomes ready, and that stuck state is what surfaces as `CycleError`. `topological_sorter` turns that into one valid order; you never hand-order the YAML file, and the engine only has to solve for that order once, not every scan.
+Function blocks complicate the search slightly because their logic does not live under a single `expression` field. An `RS` uses `Set` and `Reset`; a `CTUD` uses `CU`, `CD`, `R`, and `LD`; a `TON` uses `IN` and `PT`.
 
-## Cycles, and the one exception that makes self-reference possible
+`collect_operation_vars()` therefore does not try to predict where dependencies will appear. It walks every field except a small set of metadata keys (`name`, `type`, `output`, `note`, `source`, `load_value`) and collects whatever tag references it encounters.
 
-If operation A reads a tag produced by B, and B (even transitively) reads a tag produced by A, that's a dependency **cycle** — `topological_sorter` raises `CycleError` rather than silently picking an order. This happens more than it sounds like it should, because "X determines Y, and Y's outcome should affect X" is a very natural thing to want to describe in plain language, and it's exactly what breaks a single-pass evaluation.
+The result is deliberately plain:
 
-**The one exception:** an operation reading its **own** output tag is not a real dependency edge — `graph_builder` explicitly skips it. That's what lets a timer check whether it's already running, or a counter compare against its own position, without being flagged. This exemption is for literal self-reference only — it doesn't extend to two operations referencing each other, no matter how many operations sit between them.
+```python
+{operation_name: [names_of_operations_it_depends_on]}
+```
 
-**A concrete example, from the elevator, showing this isn't just a technicality.** A real LOOK-algorithm dispatch needs to compare pending calls against the car's own position. If `Current_Floor` is an operation the logic drives itself (`Elevator_System_1`'s `CTUD`), giving `Target_Floor` a `{var: "Current_Floor"}` reference closes a genuine cross-operation cycle — confirmed empirically by actually building that graph and hitting `CycleError`. Move `Current_Floor` to a `runtime_input` written by external code instead (`Elevator_System_2`), and the identical comparison costs nothing, because `runtime_inputs` never get a producer edge in the first place. The lesson generalizes: some upgrades aren't blocked by missing logic, they're blocked by *who owns the tag* the logic needs to read.
+`topological_sorter()` itself does not reimplement the sorting algorithm. It is a thin wrapper around Python's standard-library `graphlib.TopologicalSorter`, which exists precisely for this class of problem.
 
-**The exemption isn't limited to function blocks.** A plain stateless `if`/`+`/`-` operation can self-reference its own output the same way, since the exemption is about the tag reference, not the operation type. That's what lets a running accumulator — the kind a CUSUM control chart needs — live as genuine declarative YAML instead of hidden Python state, `example/Elevator_System_3/elevator_3.yaml`:
+It is worth understanding what `static_order()` is solving, because “sorting the operations” makes the mechanism sound more arbitrary than it is.
+
+Every operation begins by waiting for the operations it depends on. Any operation with no unresolved dependencies is *ready* and can be emitted. Once emitted, it releases the operations that were waiting on it; some of those may now become ready themselves. The process repeats until every operation has been emitted in an order where no operation appears before something it requires.
+
+A cycle is the exact case in which this process cannot finish. A group of operations remains permanently unresolved because every member is still waiting for another member of the same group. None can become ready.
+
+That structural impossibility is what surfaces as `CycleError`.
+
+The important consequence is simple: **the YAML never has to encode execution order manually.** The dependency graph already contains that information, so the engine derives it once at load time and reuses the resulting order for every scan.
+
+
+## Cycles, and the exception that makes self-reference possible
+
+If operation A reads a tag produced by B, while B — directly or through other operations — depends on a tag produced by A, the graph contains a dependency **cycle**.
+
+There is no valid single-pass ordering for such a graph, so `topological_sorter()` raises `CycleError` rather than silently imposing an arbitrary one.
+
+This matters more than it might initially appear. “X determines Y, and Y's outcome should affect X” is a perfectly natural relationship to describe in plain language. Computationally, however, it asks a single scan to know a result before that result can be produced.
+
+There is one deliberate exception.
+
+An operation may read **its own output tag** without creating a dependency edge. `graph_builder()` explicitly removes that edge.
+
+That is what allows a timer to inspect its previous output, a counter to compare against its own position, or an accumulator to build on its previous value. The operation's output from the preceding scan already exists in `tags`; no other operation needs to be executed first to make that value available.
+
+The exemption is intentionally narrow. It applies to literal self-reference only. Two operations referencing one another still form a genuine cycle, regardless of how many intermediate operations connect them.
+
+
+### Why ownership of a tag matters
+
+The elevator provides a useful example because the distinction changes what can be expressed without changing the underlying logic.
+
+A LOOK-style dispatch algorithm needs to compare pending calls with the car's current position.
+
+In `Elevator_System_1`, `Current_Floor` is itself produced by a `CTUD` operation. If `Target_Floor` reads `Current_Floor` while `Current_Floor` also depends on `Target_Floor`, the two operations close a genuine cross-operation cycle. Building that graph produces `CycleError`.
+
+In `Elevator_System_2`, `Current_Floor` instead becomes a `runtime_input` written by the external physics plant. The dispatch comparison can remain conceptually identical, but the dependency cycle disappears: `runtime_inputs` have no producing operation inside the graph, and therefore introduce no producer edge.
+
+The deeper point is that **some extensions are constrained not by whether the required logic exists, but by who owns the state that logic needs to observe.**
+
+That is one reason the distinction between `runtime_inputs` and operation outputs in the YAML format is structural rather than cosmetic.
+
+
+### Self-reference is not limited to function blocks
+
+The exemption belongs to the dependency model, not to any particular operation type. A stateless `if`, `+`, or `-` operation can therefore reference its own output in exactly the same way.
+
+That makes it possible to express persistent constructs such as a running accumulator entirely in declarative YAML rather than hiding their state in bespoke Python.
+
+The CUSUM accumulator in `example/Elevator_System_3/elevator_3.yaml` is a concrete example:
 
 ```yaml
 - name: "CUSUM_High"
@@ -85,15 +177,31 @@ If operation A reads a tag produced by B, and B (even transitively) reads a tag 
   output: "CUSUM_High"
 ```
 
-It creates no cycle risk despite reading its own output every scan, for the same reason the `Current_Floor` counter above doesn't.
+It reads its own previous output on every scan, yet introduces no cross-operation cycle for exactly the same reason as the `Current_Floor` counter.
 
-**When you hit a `CycleError`**, the fix is essentially always the same: find the tag read by both sides of the loop, and change one side to read something else — a raw input instead of a derived value, or the block's own self-reference instead of a separate named intermediate.
+When a genuine `CycleError` does occur, the remedy is usually structural rather than syntactic: identify the state that closes the loop and reconsider where that state should come from. Often one side should read a raw external input rather than a derived value, or use its own previous output rather than a separately produced intermediate.
 
-## Extension and modularity: swapping in a physics plant
+The question is not merely *“How should this expression be rewritten?”* but *“What information is actually available at this point in the scan, and who should own it?”*
 
-Everything above exists to make one thing possible: once a system's core logic is genuinely solidified — working, and simple enough to trust — real capability can keep getting added on top of it, layer after layer, without ever going back and rebuilding what already works. That's not an aspiration about the design, it's exactly what happened across the three stages of `example/`, and it's worth walking through concretely rather than just asserting it: the same headroom that let a physics plant and a monitoring layer get added here is the same headroom available for whatever gets built on top of this next — a different dispatch strategy, a maintenance-cost model, a second car sharing the shaft. The simplicity of the syntax and the elegance of the recursive design covered above aren't just clean for their own sake; they're precisely what keeps that door open, because neither the vocabulary nor the engine has to change shape to accommodate something new.
 
-This is the one seam worth understanding precisely, without getting into any plant's own physics (see `example/Elevator_System_2/car_physics_2.py` and `example/Elevator_System_3/car_physics_3.py` for that): a plant is nothing but another writer to the same `tags` dict, called once per scan from `simulation_runner.py`, immediately *after* `run_scan()`.
+## Extension and modularity: preserving what already works
+
+The architectural choices above ultimately serve a larger purpose: once a layer of the system is understood, working, and simple enough to trust, extending the model should not require rebuilding that layer.
+
+The three stages under `example/` make that principle concrete.
+
+The first establishes the control logic. The second places a physical model underneath it. The third adds monitoring on top of the resulting behaviour. Each stage gains capability without requiring the previous stage's working logic to be rewritten.
+
+That is the practical value of the simplicity described throughout this document. Recursion, a shared tag model, dependency-derived ordering, and a narrow interface to external code are not merely aesthetically clean choices. Together, they leave architectural room for the system to grow without forcing every new capability back through its foundations.
+
+The two extension mechanisms used in the examples illustrate this from opposite directions.
+
+
+### Extending beneath the logic: a physics plant
+
+A plant is simply another participant in the same world model: another writer to `tags`.
+
+It is called once per scan from `simulation_runner.py`, immediately *after* `run_scan()`:
 
 ![Plant integration](assets/plant_integration.svg)
 
@@ -103,6 +211,27 @@ if plant is not None:
     plant.step(tags)
 ```
 
-That ordering is the whole trick: `plant.step(tags)` reads *this* scan's fresh logic outputs (e.g. `Moving`) and writes the tag *next* scan's logic will read (e.g. `Current_Floor`) — which is exactly why that tag has to live under `runtime_inputs` rather than `outputs` (see the YAML guide's note on that section). The engine itself never imports or knows about any plant class; `run_scan_loop()`'s `plant` parameter just accepts anything with a `.step(tags)` method, or `None` for a stage with no physical layer at all (`Elevator_System_1`). Swapping in a different plant, or none, changes nothing about `engine/`.
+That ordering defines the interface.
 
-That's one axis of extension — a whole new subsystem written *underneath* the logic, without the logic knowing it's there. The CUSUM monitoring layer above is the other axis: a capability added entirely *within* the declarative graph itself, by adding new operations that read outputs which already existed (`Abs_Velocity_Residual`, and ultimately the plant's own state), with nothing about `Elevator_System_2`'s dispatch or door logic touched at all. One extension went underneath the graph; the other went inside it. Neither required rebuilding anything the stage before it had already gotten working — and those are just the two extensions that actually got built here, not a ceiling on what the same two seams can take next.
+`plant.step(tags)` reads the logic outputs produced during the current scan — for example `Moving` — and writes the physical state that the logic will observe on the *next* scan — for example `Current_Floor`.
+
+This is precisely why a plant-owned quantity such as `Current_Floor` belongs under `runtime_inputs` rather than `outputs`: from the declarative graph's perspective, it arrives from outside.
+
+The engine itself knows nothing about elevator physics, or indeed about any particular plant. `run_scan_loop()` simply accepts an object exposing `.step(tags)`, or `None` when no physical layer exists, as in `Elevator_System_1`.
+
+A different plant can therefore be substituted without changing `engine/`, because the abstraction boundary is not “an elevator plant.” It is simply **something that reads and writes the shared state once per scan.**
+
+
+### Extending within the logic: a monitoring layer
+
+The CUSUM layer demonstrates the other direction of extension.
+
+Instead of placing a subsystem beneath the declarative graph, it adds capability *inside* it: new operations read signals that already exist, derive new quantities, and expose new outputs. The dispatch, motion, and door logic from the previous stage remain untouched.
+
+One extension therefore enters through the external `plant.step(tags)` seam; the other enters through the declarative vocabulary itself.
+
+Neither requires the system beneath it to be redesigned.
+
+Those two examples are not meant as a ceiling on what the architecture can support. The same boundaries leave room for a different dispatch strategy, a maintenance-cost model, additional monitoring, another physical model, or higher-level decision-making without changing the basic shape of the engine.
+
+That is the larger design principle behind the implementation: **new capability should compose with what is already understood, rather than forcing it to be rewritten.**
