@@ -1,61 +1,5 @@
-# Elevator_System_1 -- pure logic, no physical modeling.
-# See example/Elevator_System_1/description_1.md for the plain-English
-# version this was translated from.
-#
-# Floors are numbered 0 (ground) through 5 -- six floors, not the original
-# three. Widened deliberately: with only two floors of travel room, a real
-# trapezoidal motion profile (Elevator_System_2) barely has distance to
-# reach cruise speed before it has to start braking again, so the
-# accel/cruise/decel shape this project is actually trying to demonstrate
-# was hard to see. More floors gives the physics room to show a real
-# cruise plateau on a multi-floor trip. Motion between floors here is still
-# a placeholder: a fixed Travel_Time_Per_Floor per floor crossed, not real
-# physics -- that's exactly what Elevator_System_2 replaces.
-#
-# Also added: Close_Door_Button, a manual override that can close the doors
-# before Door_Hold_Time elapses -- the same interlock a real elevator door-
-# close button provides. Wired into Doors_Open's Reset list (see below),
-# which already supports multiple OR'd conditions natively -- this needed
-# no new engine capability, just one more list entry.
-#
-# Two structural notes worth reading before extending this file (both are
-# consequences of how this engine works, not bugs in the elevator logic
-# itself -- see docs/architecture.md for the general version of these rules):
-#
-# 1. Dispatch (Target_Floor) reads the raw call buttons directly, not a
-#    latched "request" tag. A latch that both feeds dispatch AND gets cleared
-#    by the result of that dispatch is a same-scan cycle (the tag would need
-#    to be computed before and after itself in the same pass) -- the engine
-#    only allows a stateful block to read its OWN prior output, not a loop
-#    through other operations. Practical effect: a call has to still be held
-#    (or re-pressed) by the time the car is idle and free to serve it.
-#    Floor#_Request below is a genuine remembered latch, used for clearing
-#    bookkeeping once served, but it is a dependency SINK -- nothing reads it
-#    back into dispatch, so it can't be part of a cycle.
-#
-# 2. Travel_Pulse does not check Doors_Open. Once Current_Floor reaches
-#    Target_Floor, its own CU/CD conditions naturally go false (Target isn't
-#    greater or less than itself), so the car correctly stops regardless.
-#    The one gap this leaves: if a second floor is called while the doors are
-#    still open at the first, Target_Floor can switch mid-dwell and the car
-#    will start counting toward the new floor before the door cycle finishes
-#    -- a same-scan cycle again if fixed the obvious way (gating the timer on
-#    Doors_Open, which is itself downstream of arrival, which is downstream
-#    of the timer). Known Stage 1 simplification, not present when calls come
-#    one at a time.
-#
-# 3. Travel_Pulse and Clock_Pulse both use the self-oscillating TON idiom
-#    (IN gated on the block's own negated output). That idiom is periodic
-#    but NOT uniformly periodic at PT: the first pulse after the gating
-#    condition goes true fires after exactly PT scans, but every pulse after
-#    that is PT+1 scans apart (see docs/architecture.md's "Known limitation:
-#    self-oscillating pulses aren't uniformly periodic" for the mechanism).
-#    Measured, behaviorally verified effect on this file: a ground-to-2nd-
-#    floor trip takes 9 scans, not the 8 that "4 seconds per floor" implies;
-#    door-hold takes ~12 scans against a configured Door_Hold_Time of 6,
-#    since Clock_Pulse ticks roughly every 2 scans in steady state instead
-#    of every 1. Discovered during validation, not part of the original
-#    translation intent -- documented rather than fixed for Stage 1.
+# Elevator System 1: control logic only.
+# Position is generated internally by the rule graph; there is no physical plant.
 
 runtime_inputs:
   Call_Floor0: {type: BOOL}
@@ -65,7 +9,7 @@ runtime_inputs:
   Call_Floor4: {type: BOOL}
   Call_Floor5: {type: BOOL}
   Door_Obstruction: {type: BOOL}
-  Close_Door_Button: {type: BOOL, note: "Momentary, not a toggle -- a caller should set this True for exactly one scan per press, then clear it back to False, the same way a real pushbutton behaves. Doors_Open's RS is Reset-dominant, so if this were left True continuously, doors could never open again on a future arrival."}
+  Close_Door_Button: {type: BOOL, note: "Momentary input: set True for one scan per press."}
 
 hmi_configuration:
   Travel_Time_Per_Floor: {type: REAL, default: 4}
@@ -94,11 +38,11 @@ outputs:
   Floor5_Request: {type: BOOL}
 
 operations:
-  # --- Dispatch: which floor should the car be heading to right now ---
+  # --- Dispatch ---
 
   - name: "Target_Floor"
     type: "if"
-    note: "Priority order when more than one call is active: ground first, then ascending. Reads the raw buttons, not the latches below -- see note 1 above."
+    note: "Simple priority dispatch: lowest-numbered active call is selected first."
     expression:
       if:
         - {var: "Call_Floor0"}
@@ -133,11 +77,11 @@ operations:
         - {var: "Call_Floor5"}
     output: "Any_Pending"
 
-  # --- Movement: turning "where should I go" into an actual position ---
+  # --- Movement ---
 
   - name: "Current_Floor"
     type: "CTUD"
-    note: "CU/CD compare Target_Floor against this same operation's own output (Current_Floor) -- a direct self-reference, which is what makes this safe (see note 1 above): it reads last scan's position, not a fresh cross-operation dependency."
+    note: "Self-reference reads the previous scan's Current_Floor value."
     CU:
       and:
         - {var: "Travel_Pulse"}
@@ -154,7 +98,6 @@ operations:
 
   - name: "Moving"
     type: "and"
-    note: "Downstream indicator only -- nothing reads this back into dispatch or the position counter, so it's safe as a plain sink, even though it reads Doors_Open which is defined further down."
     expression:
       and:
         - {"!": {var: "Doors_Open"}}
@@ -163,7 +106,7 @@ operations:
 
   - name: "Travel_Pulse"
     type: "TON"
-    note: "Self-oscillating, same idiom as Clock_Pulse below -- pulses once every Travel_Time_Per_Floor seconds for as long as any call is pending. See note 2 above for why this doesn't also check Doors_Open. Timing caveat: see note 3 above -- the first floor crossing of a trip takes exactly Travel_Time_Per_Floor scans, every crossing after that in the same trip takes one scan longer."
+    note: "Self-oscillating timer used to represent discrete floor crossings."
     IN:
       and:
         - {var: "Any_Pending"}
@@ -171,11 +114,11 @@ operations:
     PT: {var: "Travel_Time_Per_Floor"}
     output: "Travel_Pulse"
 
-  # --- Doors: opening, holding, and closing once the car arrives ---
+  # --- Doors ---
 
   - name: "Doors_Open"
     type: "RS"
-    note: "Reset fires on either the normal hold timer OR the manual close-door button -- RS's Reset field already supports multiple OR'd conditions natively, so this needed no new engine capability."
+    note: "Doors close after the hold timer or immediately on a manual close command."
     Set: [{var: "Just_Arrived"}]
     Reset: [{var: "Door_Timer_Q"}, {var: "Close_Door_Button"}]
     output: "Doors_Open"
@@ -187,7 +130,7 @@ operations:
 
   - name: "Just_Arrived_Condition"
     type: "and"
-    note: "Requires Any_Pending, not just Current_Floor==Target_Floor -- otherwise this fires spuriously at simulation start, since idle-with-no-calls also happens to leave Target_Floor equal to Current_Floor (see Target_Floor's fallback above)."
+    note: "Any_Pending prevents a false arrival event at startup."
     expression:
       and:
         - {var: "Any_Pending"}
@@ -202,7 +145,7 @@ operations:
 
   - name: "Door_Elapsed"
     type: "CTUD"
-    note: "Counts whole seconds since the last arrival. Resets on a fresh arrival OR on an obstruction -- but R is edge-triggered, so a long continuous block only resets once at the moment it starts, then counting resumes even while still blocked. Close enough to how real elevators behave anyway (periodic re-attempts, not an indefinite hold), but worth knowing if you extend this."
+    note: "Door timing resets on arrival or obstruction."
     CU: {var: "Clock_Pulse"}
     CD: {var: "Never"}
     R:
@@ -216,16 +159,15 @@ operations:
 
   - name: "Clock_Pulse"
     type: "TON"
-    note: "Free-running 1-second pulse, self-referencing only -- depends on nothing else, so it's always safe to add more consumers of this. Timing caveat: see note 3 above -- in steady state this ticks roughly every 2 scans, not every 1, so Door_Elapsed below advances at roughly half the configured rate after its first tick."
+    note: "Self-oscillating timer used as the door-timing clock."
     IN: {"!": {var: "Clock_Pulse"}}
     PT: {var: "One_Second"}
     output: "Clock_Pulse"
 
-  # --- Requests: per-floor "still pending" bookkeeping, cleared once served ---
+  # --- Request state ---
 
   - name: "Floor0_Request"
     type: "RS"
-    note: "Remembered/pending indicator for floor 0, cleared once served. A pure sink -- nothing else reads this tag, so it can't be part of a cycle (see note 1 above)."
     Set: [{var: "Call_Floor0"}]
     Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 0]}]}]
     output: "Floor0_Request"

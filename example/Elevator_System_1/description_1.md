@@ -1,23 +1,37 @@
-# The system, in plain English
+# Elevator System 1 — Control Logic
 
-Picture a small building with six floors — ground floor through the fifth floor — and a single elevator car serving all of them. Nothing fancy, just one car, one shaft, six stops. (Originally described with three floors; widened to six specifically so `Elevator_System_2`'s motion has enough distance to show a real cruise phase, not because the elevator itself changed — see `elevator.yaml`'s top comment for the full reasoning.)
+A single elevator serves six floors, from ground floor (`0`) to floor `5`.
 
-Each floor has a call button next to the shaft doors. Press it, and you're telling the elevator "come get me here." Inside the car itself there's a separate panel with a button for each floor — press one of those once you're inside, and you're telling the car "take me there." Either kind of button press is really the same thing to the elevator: a request for it to go to a particular floor. It doesn't matter if the request came from someone waiting outside or someone already riding — a floor either has a pending request or it doesn't.
+This first model focuses only on the **control and decision-making layer**. There is no independent physical model of the elevator yet: movement and position are represented directly by the control logic.
 
-When a request comes in, the elevator needs to actually get there. If it's already sitting at the requested floor with its doors closed, it just opens them. Otherwise, it starts moving — up or down, whichever direction actually gets it to that floor. Moving between two adjacent floors takes 4 seconds, so a full trip from the ground floor to the top floor takes 20 seconds. While it's moving, the elevator keeps track of which floor it's currently at, updating that count every time it passes one.
+## Required behaviour
 
-Once the car arrives at a floor it was asked to visit, two things happen: the doors open, and that floor's request is cleared — it's been served, no longer pending. The doors stay open for 6 seconds, giving whoever's there time to get on or off, then close automatically once that time's up. Whoever's inside can also press a close-door button to cut that hold short and shut the doors right away, instead of waiting out the full 6 seconds. If someone's still in the doorway when the doors try to close — blocked by a person, a bag, whatever — a sensor catches that and restarts the same 6-second hold, so the doors never close on someone; they only start counting down again once the doorway is actually clear.
+Each floor can generate a request. Internal and external floor buttons are treated identically — the controller only needs to know that a floor is waiting to be served.
 
-While the doors are open, the car doesn't move, even if another floor has a pending request in the meantime — it waits until its own doors are fully shut before it's allowed to go anywhere else.
+When one or more requests are active, the controller selects a `Target_Floor`.
 
-That's the whole loop, over and over: sit idle until something requests a floor, travel there (4 seconds per floor crossed) while tracking position along the way, arrive and open the doors, hold them open for 6 seconds (restarting that hold each time something blocks them, or cutting it short on a close-door press), close them once clear, then check if there's anywhere else it still needs to go.
+The elevator then decides whether it must move up, move down, or remain where it is. Travel is represented as taking **4 seconds per floor**, with `Current_Floor` updated as each floor is crossed.
 
-**A note on the translation — timing:** the numbers above (4s/floor, 6s door hold) are the design intent, and the simulation matches them for the *first* floor crossed or the *first* second of a door hold. After that, the specific timer construction used in `elevator.yaml` runs one scan slower per subsequent cycle, so a multi-floor trip or a full door-hold cycle takes a bit longer in practice than a literal reading of these numbers would suggest. This is a known, documented artifact of the translation (not a change to the spec above) -- see the inline notes on `Travel_Pulse` and `Clock_Pulse` in `elevator.yaml` for the exact mechanism.
+When the elevator reaches the target:
 
-**A note on the translation — button presses:** "press it, and you're telling the elevator come get me" reads like a normal call button: press once, the request is remembered until served. The translated logic doesn't actually do that. Dispatch reads the raw call signal fresh every scan, not a remembered request (see `elevator.yaml`'s note 1) — a request only counts if the button is still active at the exact moment the car becomes free to serve it. In the interactive simulation (`run_simulation.py`), a click is treated as holding that button down: it stays "pressed" internally until the elevator actually arrives and the request is served, then releases automatically. That's what makes it behave like an ordinary call button from the outside — the holding is done by the simulation's driver code, not by the dispatch logic itself, which is only ever looking at whether the button is active right now, never whether it was ever pressed before.
+1. movement stops;
+2. the request is considered served;
+3. the doors open.
 
-**A note on the translation — priority order:** when more than one floor has a pending request, the elevator doesn't serve them in the order they were pressed, and it doesn't necessarily finish one trip before starting the next. `Target_Floor` is recomputed from scratch every single scan, and always picks the lowest-numbered floor currently pending — no memory of what was requested first, no preference for continuing in whichever direction it's already moving. Concretely, and confirmed by actually running it: if the car is already partway toward floor 4 and someone presses floor 1, it doesn't finish going to 4 first — it reverses immediately, mid-trip, because 1 is now the lowest active request.
+The doors normally remain open for **6 seconds**. They may be closed early with `Close_Door_Button`, while `Door_Obstruction` prevents them from closing until the obstruction has cleared.
 
-This is not what a real elevator does. Real single-car dispatch (the industry term is "Selective Collective" control) is what computer science knows as the **LOOK algorithm**: keep going in the direction you're already moving, serve every call you pass along the way, and only reverse once nothing is left ahead of you in that direction. `Elevator_System_2` actually implements this properly (see its own `elevator.yaml`) — worth checking there for the real thing.
+The elevator must never move while its doors are open.
 
-The reason it isn't implemented here isn't laziness, and it's a genuinely structural one, confirmed rather than assumed: LOOK dispatch has to compare pending calls against the car's own current position, to know what's "ahead" of it. Here, `Current_Floor` is a `CTUD` operation — the logic's own counter — and that same operation's `CU`/`CD` fields already read `Target_Floor` to know whether to count up or down. If `Target_Floor` were also given a `Current_Floor` reference (to compute "nearest call ahead"), the two operations would depend on each other in the same scan — confirmed by actually trying it: `graph_builder` raises a genuine `CycleError`, not a hypothetical one. Real LOOK dispatch only becomes possible once position stops being something the logic owns and drives itself, which is exactly `Elevator_System_2`'s whole point.
+Once the doors close, the controller evaluates the remaining requests and repeats the sequence.
+
+## Dispatch in this first model
+
+The dispatch policy is deliberately simple: when several floors are requested, the controller selects the **lowest-numbered active floor**.
+
+This is sufficient for the purpose of the first example: to represent and execute the core control sequence — request, target selection, direction, travel, arrival, and door handling — entirely within the declarative rule graph.
+
+It is not intended to reproduce realistic elevator scheduling.
+
+A more realistic direction-aware policy requires the controller to reason about the car's physical position independently of the logic that commands its movement. In this first model, `Current_Floor` is itself produced by the control graph, so that information is not yet independent.
+
+`Elevator_System_2` introduces a separate physical model and makes `Current_Floor` an externally observed state, allowing the dispatch logic to become correspondingly richer.

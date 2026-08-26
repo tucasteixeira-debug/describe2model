@@ -1,23 +1,103 @@
-# Elevator_System_3 -- design problem and requirement
+# Elevator System 3 — Physical Degradation + Monitoring
 
-Based on `Elevator_System_2`, it's noticeable that there is exactly one physics model in the whole system, and no way to ask whether it's behaving correctly. `Current_Floor` comes from a single kinematic plant, and there is nothing else to compare it against -- no second opinion, no reference, no way to distinguish "this is what the car is doing" from "this is what the car *should* be doing," because those are definitionally the same number. A monitoring layer needs exactly the thing this stage doesn't have: an independently-produced expectation to check reality against.
+A single elevator serves six floors, from ground floor (`0`) to floor `5`.
 
-So the new requirement for `Elevator_System_3` is: run two physics models every scan, not one. A **nominal** model -- the exact same trapezoidal accel/cruise/decel plant from `Elevator_System_2`, unmodified, computing what a healthy car should be doing, completely decoupled from whatever the real car is actually doing. And an **actual** model -- not a repeat of the same kinematic law, but a genuinely different, more complex one: a real motor-and-car system has inertia and compliance a kinematic model doesn't, so the actual plant is a real second-order mass-spring-damper system, tracking the nominal plant's position and velocity as a moving target it's trying to follow. `Current_Floor` -- the tag dispatch actually reads -- comes from the actual plant, same as before; the nominal plant's output is new, and read by nothing except a monitoring layer.
+This third model keeps the control and dispatch structure from `Elevator_System_2`, but introduces a new question:
 
-That monitoring layer has a specific, narrow job: catch **slow drift**, not an obvious, constant difference. A synthetic wear parameter degrades the actual plant's damping ratio slowly over time (only while the car is actually in use, not while it's sitting idle) -- a real, physically motivated failure mode (a damper wearing out), not an arbitrary number injected to make a demo work. A healthy, critically-damped actual plant tracks the nominal plant closely; a worn, underdamped one overshoots and rings before settling. The requirement is specifically that this needs to be undetectable by a naive check at any single instant, and only become obvious once evidence accumulates over many trips -- which is what a CUSUM (cumulative sum) monitor is actually for, and why a fixed threshold on the residual alone wouldn't demonstrate anything a naive check couldn't already catch.
+**is the physical elevator still behaving as a healthy elevator should?**
 
-## What actually happened building this, including the parts that were wrong at first
+To answer that, the simulation now runs two physical models in parallel:
 
-Three separate things had to be found and fixed empirically before this worked, worth being honest about rather than presenting the final numbers as if they were obvious from the start.
+- a **nominal plant**, representing the expected behaviour of a healthy elevator;
+- an **actual plant**, representing the physical behaviour being observed.
 
-**The first attempt was numerically unstable.** The project's convention everywhere else is one scan equals one second. That's fine for a kinematic model, where velocity changes slowly relative to a second, but the actual plant is a genuine second-order ODE with its own fast natural timescale -- at the frequencies involved, roughly an order of magnitude faster than a full second. Integrating it at one-second resolution didn't produce a rough approximation; it diverged outright, confirmed by watching the car's position read 5.0 after a single scan starting from a standing start. The fix is standard for embedding fast continuous dynamics inside a slower control loop: `Moving`/`Target_Floor` are still only ever sampled once per outer scan, but the physics itself is integrated in many small internal sub-steps.
+The difference between them becomes the basis for a condition-monitoring layer.
 
-**The second attempt sub-stepped the wrong thing.** Holding the nominal model's setpoint frozen for the whole outer scan, and only sub-stepping the actual plant against that frozen target, produced a "chase the stationary point, then sit still and wait" pattern instead of smooth tracking -- caught by actually inspecting a single scan's trajectory, not predicted in advance. The fix was to sub-step *both* plants together, so the actual plant is always chasing a target that's genuinely still moving.
+## Physical models
 
-**The third attempt fed CUSUM the wrong signal.** The first design used a signed, two-sided CUSUM -- one accumulator watching for the car running persistently faster than nominal, a mirror-image one watching for persistently slower. It never accumulated meaningfully even with real, confirmed wear present. Tracing a worn trip's residual directly showed why: it's negative during the first part of each transition and positive during the next -- a genuine oscillation around zero, not a shift to one side. A signed two-sided CUSUM is built to catch a shift in mean; fed a symmetric oscillation instead, its positive and negative excursions mostly cancel against each other rather than building toward either threshold. The fix was switching to a single CUSUM on the residual's *magnitude* -- the standard, correct tool for detecting growing spread rather than a shifted mean, which is what damping-driven ringing actually is.
+The nominal plant is the same trapezoidal motion model used in `Elevator_System_2`:
 
-## The tuning, and what it actually produces
+- maximum velocity: **0.5 floors/s**
+- acceleration: **0.25 floors/s²**
+- deceleration: **0.25 floors/s²**
 
-`Natural_Frequency` went from an initial guess of 8 rad/s down to 2. At 8, the system was so fast it reabsorbed every disturbance before underdamping had time to build visible amplitude -- even fully worn, the resulting residual peaked around 0.006 floors/second, barely above a healthy system's own transient noise. At 2, a worn system's ringing is large enough to actually separate from that noise floor.
+It provides the reference trajectory — the position and velocity the elevator is expected to follow under normal operation.
 
-`Slack_K` (0.02) and `Threshold_H` (0.25) were picked by tracing the real trip-by-trip behavior, not by formula: a fully healthy run (zero wear, 200 simulated round trips) never pushes `CUSUM_High` above 0.0114 -- more than 20x below the threshold. A worn run (`Wear_Rate` = 0.0015 per second of actual use) alarms at trip 46, with the damping ratio having just reached its floor -- catching the problem right as it becomes physically significant, not dozens of trips after it was already fully broken, and not so early that it's really just reacting to normal healthy variation.
+The actual plant is instead represented as a second-order mass–spring–damper system tracking that reference.
+
+Its behaviour is defined by:
+
+- natural frequency: **2.0 rad/s**
+- initial damping ratio: **1.0**
+- minimum damping ratio: **0.15**
+- wear rate: **0.0015 damping-ratio units per second of movement**
+
+A damping ratio of `1.0` represents the healthy, critically damped condition: the system follows the reference without oscillatory overshoot.
+
+Wear is applied only while the elevator is moving. As use accumulates, the damping ratio gradually falls toward `0.15`, making the physical response increasingly underdamped and causing progressively stronger overshoot and ringing.
+
+`Current_Floor` and `Velocity_FloorsPerSec` come from the **actual** plant and remain the physical states used by the controller.
+
+The nominal plant exists only as an independent reference for monitoring.
+
+## Monitoring requirement
+
+The objective is not to detect an obvious instantaneous fault. It is to detect **slow degradation that becomes meaningful only when evidence is accumulated over time**.
+
+The monitor compares actual and nominal velocity:
+
+`Velocity_Residual = Actual_Velocity - Nominal_Velocity`
+
+Because damping degradation produces an oscillatory residual — sometimes positive and sometimes negative — the monitoring signal uses its magnitude:
+
+`Abs_Velocity_Residual = |Velocity_Residual|`
+
+A CUSUM accumulator then tracks persistent excess deviation:
+
+`CUSUM_High = max(0, CUSUM_High_previous + Abs_Velocity_Residual - Slack_K)`
+
+with:
+
+- CUSUM slack `Slack_K`: **0.02 floors/s**
+- alarm threshold `Threshold_H`: **0.25**
+
+An alarm is raised when:
+
+`CUSUM_High >= Threshold_H`
+
+The controller itself does not use this alarm to alter the elevator's behaviour. The monitoring layer is observational: it derives information about the condition of the physical system without changing the dispatch or door logic underneath it.
+
+## Numerical integration
+
+The control engine continues to operate with a **1-second outer scan**.
+
+The second-order plant evolves on a significantly faster timescale, so both physical models are integrated internally using **100 substeps per scan**, giving an internal integration step of **0.01 s**.
+
+The controller therefore still makes decisions once per second, while the physical dynamics are resolved at a sufficiently fine timestep to remain numerically stable.
+
+Arrival uses the same numerical tolerances as `Elevator_System_2`:
+
+- position tolerance: **0.02 floors**
+- velocity tolerance: **0.01 floors/s**
+
+## What this model represents
+
+The system now contains three distinct levels of information:
+
+- **control intent** — where the controller wants the elevator to go;
+- **observed physical behaviour** — what the actual plant does;
+- **expected physical behaviour** — what the nominal plant predicts a healthy system should do.
+
+The monitoring layer reasons about the relationship between the last two.
+
+This allows the model to answer a new question:
+
+**is the difference between expected and observed behaviour remaining consistent with normal operation, or is evidence of degradation accumulating over time?**
+
+With zero wear, a 200-round-trip simulation keeps `CUSUM_High` below approximately **0.0114**, well below the alarm threshold of `0.25`.
+
+With the default wear rate of `0.0015`, the CUSUM reaches the alarm threshold at approximately **trip 46**, as the damping ratio approaches its lower bound of `0.15`.
+
+These values are demonstration parameters rather than measurements from a real elevator or a validated predictive-maintenance system.
+
+The purpose of the model is narrower: to show that once expected and observed behaviour are represented independently, a new diagnostic layer can be added around the existing control and physical model without requiring either to be redesigned.

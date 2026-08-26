@@ -1,105 +1,5 @@
-# Elevator_System_2 -- real motion physics, logic no longer owns position.
-# See examples/elevator/Elevator_System_2/description.md for the plain-English
-# problem statement this was translated from.
-#
-# Floors are numbered 0 (ground) through 5 -- six floors, matching
-# Elevator_System_1's own widening. Widened for the same reason there: two
-# floors of travel room barely lets the trapezoidal profile reach cruise
-# speed before it has to brake again, which made System_2's whole point
-# (real accel/cruise/decel, not just "not instant") hard to actually see.
-# A multi-floor trip now has room for a real cruise plateau.
-#
-# Also added: Close_Door_Button, the same manual door-close override added
-# to Elevator_System_1 -- wired identically, into Doors_Open's Reset list.
-#
-# Structural notes worth reading before extending this file:
-#
-# 1. Current_Floor and Velocity_FloorsPerSec are declared under
-#    runtime_inputs, NOT outputs -- deliberately. In Elevator_System_1,
-#    Current_Floor was a CTUD operation the logic drove itself, which is
-#    exactly the authority a real logic controller doesn't have (see
-#    description.md). Here it's written every scan by an external physics
-#    plant (examples/elevator/Elevator_System_2/car_physics.py, called once
-#    per scan, AFTER run_scan() -- same seam engine/scan_cycle.py already
-#    reserves for physical_constants, just not exercised until now). From
-#    the engine's point of view that makes Current_Floor structurally
-#    identical to a sensor: a signal the world provides, that no operation
-#    produces. runtime_inputs already means exactly that ("external signals
-#    -- sensors, buttons, anything the world provides"), so it's the
-#    correct section, not a repurposed one. graph_builder never gives it a
-#    producer edge, same as Call_Floor0 -- nothing needed to change in the
-#    engine for this to work.
-#
-# 2. Moving is unchanged from Elevator_System_1's expression, but its role
-#    isn't cosmetic anymore. In Stage 1 it was a pure sink -- a display
-#    indicator nothing else read. Here the physics plant reads THIS tag
-#    directly as its run permission: true means "the motor may drive toward
-#    Target_Floor," false means "hold position," regardless of where
-#    Target_Floor points. It's still a graph-internal sink (no OPERATION
-#    reads it back, so there's still no cycle risk -- the plant runs
-#    strictly after run_scan() completes, never inside it), but it now has
-#    real authority outside the graph. Deliberately reused rather than
-#    duplicated into a separate "Command_Run" tag -- it was already exactly
-#    the right signal, just never wired to anything that could act on it.
-#    This is also the tag worth reading alongside Velocity_FloorsPerSec if
-#    you want to see the commanded-vs-actual split directly: Moving is what
-#    the logic commands, Velocity_FloorsPerSec is what the plant actually
-#    produces. They always agree today -- the plant is perfectly obedient
-#    -- but they are genuinely two different signals, which Elevator_System_1
-#    structurally could not represent at all (Current_Floor there was the
-#    command and the result, simultaneously, because one CTUD counter was
-#    both). That split is the actual precondition Elevator_System_3's CUSUM
-#    layer needs to exist -- detecting drift requires two independently-
-#    produced values to compare, not one.
-#
-# 3. This closes a real gap from Elevator_System_1 (its note 2): a second
-#    call arriving while doors are open could preempt Target_Floor mid-dwell
-#    and start the car moving before the door cycle finished, because the
-#    old CTUD's CU/CD never checked Doors_Open (checking it would have been
-#    a same-scan cycle inside the graph). Moving already includes
-#    "!Doors_Open" in its expression -- since the physics plant now reads
-#    Moving as its literal go/no-go signal, the car physically cannot start
-#    moving until Doors_Open goes false, even if Target_Floor already
-#    jumped to a new value during the dwell. No longer a documented
-#    simplification -- a genuine fix, free from moving physics outside the
-#    graph's cycle constraints entirely.
-#
-# 4. Door/request logic (Doors_Open, Just_Arrived_Level, Floor#_Request,
-#    Door_Elapsed) is untouched from Elevator_System_1. All of it already
-#    read Current_Floor purely through {var: "Current_Floor"} -- it has no
-#    idea whether that tag comes from an operation or a physics plant, and
-#    doesn't need to. This is the "capability added around the existing
-#    graph" pitch from PROJECT_STATE.md's Objective, working as intended.
-#
-# 5. Clock_Pulse keeps the same self-oscillating TON idiom and the same
-#    known PT+1 steady-state timing quirk documented for Elevator_System_1
-#    (see docs/architecture.md's "Known limitation" section) -- untouched,
-#    not revisited here.
-#
-# 6. Target_Floor is NOT the same as Elevator_System_1's anymore. That
-#    version always picked the lowest-numbered pending call, recomputed
-#    from scratch every scan -- not what any real elevator does (confirmed
-#    by research, not assumed: real single-car dispatch is "Selective
-#    Collective" control, better known as the LOOK algorithm -- keep going
-#    in the current direction, serving every call you pass, and only
-#    reverse once nothing is left ahead of you in that direction). This
-#    file now implements real LOOK dispatch: a Going_Up direction latch,
-#    driven by whether there's anything left to serve above or below the
-#    car right now, and Target_Floor picks the nearest active call in
-#    whichever direction Going_Up currently points.
-#
-#    This is possible here specifically BECAUSE Current_Floor is a
-#    runtime_input, not an operation. LOOK dispatch fundamentally needs to
-#    compare pending calls against the car's OWN CURRENT POSITION -- that's
-#    what "nearest call ahead of me" even means. Elevator_System_1 cannot
-#    do this: Target_Floor reading Current_Floor there would create a real
-#    cross-operation cycle (Current_Floor's own CU/CD already reads
-#    Target_Floor), confirmed empirically -- graph_builder raises a genuine
-#    CycleError the moment Target_Floor is given a Current_Floor reference
-#    while Current_Floor is still a CTUD op. Not a rule that was worked
-#    around here -- a structural consequence of the same logic-owns-
-#    position problem description.md's whole framing is about. Real LOOK
-#    dispatch was never available until position left the graph.
+# Elevator System 2: control logic coupled to an external kinematic plant.
+# The controller commands motion; the plant owns position and velocity.
 
 runtime_inputs:
   Call_Floor0: {type: BOOL}
@@ -109,29 +9,22 @@ runtime_inputs:
   Call_Floor4: {type: BOOL}
   Call_Floor5: {type: BOOL}
   Door_Obstruction: {type: BOOL}
-  Close_Door_Button: {type: BOOL, note: "Momentary, not a toggle -- see Elevator_System_1's identical note. A caller sets this True for exactly one scan per press, then clears it."}
-  Current_Floor: {type: REAL, note: "Written every scan by the physics plant, not an operation -- see note 1 above. Starts at 0.0, same as any other unset runtime input."}
-  Velocity_FloorsPerSec: {type: REAL, note: "Also plant-owned. Not read by any operation right now -- exposed purely for observability (simulation script, future monitoring stage), same reasoning the reference plant class used for its own diagnostic terms."}
+  Close_Door_Button: {type: BOOL, note: "Momentary input: set True for one scan per press."}
+  Current_Floor: {type: REAL, note: "Written every scan by the physics plant."}
+  Velocity_FloorsPerSec: {type: REAL, note: "Plant-owned velocity, exposed for observability."}
 
 hmi_configuration:
   Door_Hold_Time: {type: REAL, default: 6}
   Never: {type: BOOL, default: false}
   One_Second: {type: REAL, default: 1}
 
-# Physical properties of the car and shaft, consumed only by the physics
-# plant's Python constructor -- never referenced in any operation's
-# JsonLogic expression, so (unlike hmi_configuration) these don't need to be
-# node-wrapped. Declared here anyway, in one place, rather than left as
-# hardcoded Python defaults -- same modularity reasoning as keeping every
-# other tunable constant in the YAML: one source of truth, not a number
-# quietly duplicated between this file and car_physics.py.
 physical_constants:
-  Top_Floor: {type: REAL, value: 5, note: "Upper position bound. Moved here from Elevator_System_1's hmi_configuration -- nothing in the operations graph reads it anymore now that Current_Floor isn't a CTUD."}
-  Max_Velocity: {type: REAL, value: 0.5, note: "floors/second. Per description.md's stated requirement: crossing one floor at cruise speed should take ~2 seconds -- 1 floor / 2s = 0.5. Not an arbitrary Python default; the requirement is stated, this value is just its arithmetic."}
-  Acceleration: {type: REAL, value: 0.25, note: "floors/second^2. Per description.md: reach Max_Velocity from a stop in ~2 seconds -- 0.5 / 2s = 0.25."}
-  Deceleration: {type: REAL, value: 0.25, note: "floors/second^2. Per description.md: symmetric with Acceleration -- brake from Max_Velocity to a stop over the same ~2 seconds. Equal to Acceleration by requirement here, not by engine assumption -- see car_physics.py, nothing treats the two as linked."}
-  Arrival_Tolerance: {type: REAL, value: 0.02, note: "floors. Unlike the three constants above, this one has no plain-English requirement behind it and isn't meant to -- it's a numerical implementation detail (see car_physics.py's own note on why continuous integration needs a snap tolerance at all), the same category as evaluate.py's internal mechanics, not a physical property of the car."}
-  Velocity_Snap_Tolerance: {type: REAL, value: 0.01, note: "floors/second. Same category as Arrival_Tolerance directly above -- a numerical implementation detail, not a requirement. Kept separate from Arrival_Tolerance because they're different physical quantities (position vs. speed); see car_physics.py's note on why conflating them would misfire on a fast car passing near the target without actually stopping there."}
+  Top_Floor: {type: REAL, value: 5}
+  Max_Velocity: {type: REAL, value: 0.5, note: "floors/second"}
+  Acceleration: {type: REAL, value: 0.25, note: "floors/second^2"}
+  Deceleration: {type: REAL, value: 0.25, note: "floors/second^2"}
+  Arrival_Tolerance: {type: REAL, value: 0.02, note: "Position tolerance in floors."}
+  Velocity_Snap_Tolerance: {type: REAL, value: 0.01, note: "Stop tolerance in floors/second."}
 
 outputs:
   Target_Floor: {type: REAL}
@@ -146,7 +39,7 @@ outputs:
   Door_Elapsed: {type: REAL}
   Door_Timer_Q: {type: BOOL}
   Doors_Open: {type: BOOL}
-  Moving: {type: BOOL, note: "Now also the physics plant's run/hold command -- see note 2 above."}
+  Moving: {type: BOOL, note: "Run/hold command read by the physics plant."}
   Floor0_Request: {type: BOOL}
   Floor1_Request: {type: BOOL}
   Floor2_Request: {type: BOOL}
@@ -155,11 +48,10 @@ outputs:
   Floor5_Request: {type: BOOL}
 
 operations:
-  # --- Dispatch: which floor should the car be heading to right now ---
+  # --- Dispatch ---
 
   - name: "Any_Call_Above"
     type: "or"
-    note: "True if any floor strictly above Current_Floor has a pending call. Only meaningful because Current_Floor is a runtime_input here -- see note 6 above."
     expression:
       or:
         - {and: [{var: "Call_Floor1"}, {gt: [1, {var: "Current_Floor"}]}]}
@@ -171,7 +63,6 @@ operations:
 
   - name: "Any_Call_Below"
     type: "or"
-    note: "Mirror of Any_Call_Above, for floors strictly below Current_Floor."
     expression:
       or:
         - {and: [{var: "Call_Floor0"}, {lt: [0, {var: "Current_Floor"}]}]}
@@ -183,34 +74,14 @@ operations:
 
   - name: "Going_Up"
     type: "RS"
-    note: |
-      The LOOK direction latch. Set switches to up, Reset switches to down.
-      Set and Reset conditions are mirror images and mutually exclusive by
-      construction (each requires the OTHER side to have nothing pending),
-      so RS's Reset-dominant tiebreak never actually has to arbitrate
-      between them. When BOTH sides have pending calls, neither condition
-      fires and the latch simply holds its current value -- "keep going the
-      way you're already going," which is exactly correct LOOK behavior:
-      continue in the current direction, only reverse once that direction
-      runs out of calls, even if calls exist on the other side the whole
-      time.
+    note: "LOOK direction state: continue in the current direction until no calls remain ahead."
     Set: [{and: [{"!": {var: "Any_Call_Below"}}, {var: "Any_Call_Above"}]}]
     Reset: [{and: [{"!": {var: "Any_Call_Above"}}, {var: "Any_Call_Below"}]}]
     output: "Going_Up"
 
   - name: "Target_Floor"
     type: "if"
-    note: |
-      Real LOOK dispatch (see note 6 above), not Elevator_System_1's
-      lowest-floor-wins order. Branches on Going_Up, then picks the
-      NEAREST active call in that direction relative to Current_Floor --
-      not the furthest (that would be plain SCAN, and would sail past
-      closer calls without stopping, since arrival detection below only
-      fires on an exact Current_Floor == Target_Floor match). The fallback
-      in both branches is Current_Floor itself, not a fixed floor -- an
-      idle car with nothing pending simply targets wherever it already is,
-      so Moving correctly reads False with no separate Any_Pending check
-      needed on it.
+    note: "Selects the nearest pending call in the current LOOK direction."
     expression:
       if:
         - {var: "Going_Up"}
@@ -260,22 +131,21 @@ operations:
         - {var: "Call_Floor5"}
     output: "Any_Pending"
 
-  # --- Movement command: the one signal that actually leaves the graph ---
+  # --- Movement ---
 
   - name: "Moving"
     type: "and"
-    note: "Same expression as Elevator_System_1's Moving -- see note 2 above for why it's load-bearing now, not just a display indicator. Current_Floor is a runtime_input (plant-owned), so this still resolves to a plain tag lookup, no different syntactically from reading any other var."
     expression:
       and:
         - {"!": {var: "Doors_Open"}}
         - {"!": {eq: [{var: "Target_Floor"}, {var: "Current_Floor"}]}}
     output: "Moving"
 
-  # --- Doors: opening, holding, and closing once the car arrives ---
+  # --- Doors ---
 
   - name: "Doors_Open"
     type: "RS"
-    note: "Reset fires on either the normal hold timer OR the manual close-door button -- same wiring as Elevator_System_1."
+    note: "Doors close after the hold timer or immediately on a manual close command."
     Set: [{var: "Just_Arrived"}]
     Reset: [{var: "Door_Timer_Q"}, {var: "Close_Door_Button"}]
     output: "Doors_Open"
@@ -287,23 +157,7 @@ operations:
 
   - name: "Call_At_Current_Floor"
     type: "or"
-    note: |
-      Whether ANY pending call sits exactly at Current_Floor right now.
-      This exists because comparing Current_Floor to Target_Floor for
-      arrival detection is fragile under LOOK dispatch: the instant the
-      car reaches a floor, Any_Call_Above/Below immediately re-evaluate
-      using that new position, which can flip Going_Up and change
-      Target_Floor to the NEXT destination in the very same scan --
-      BEFORE arrival at the floor it just reached ever gets checked.
-      Confirmed behaviorally: without this, a car reaching floor 4 with
-      floor 1 also pending would see Target_Floor jump to 1 before
-      Just_Arrived_Condition ever saw Current_Floor == Target_Floor == 4,
-      so it would sail straight through 4 without stopping, and
-      Floor4_Request would never clear. Checking for a call AT the current
-      position, rather than a match against a value that can change out
-      from under the comparison in the same scan, is decoupled from
-      whatever Going_Up/Target_Floor do this scan -- it only depends on
-      Call_FloorN and Current_Floor directly.
+    note: "Arrival is detected from a pending call at the observed position, independent of Target_Floor changing during the same scan."
     expression:
       or:
         - {and: [{var: "Call_Floor0"}, {eq: [0, {var: "Current_Floor"}]}]}
@@ -316,7 +170,6 @@ operations:
 
   - name: "Just_Arrived_Condition"
     type: "and"
-    note: "Just Call_At_Current_Floor directly -- it already implies a real pending call, so the old Any_Pending guard (needed back when this compared against Target_Floor's idle fallback) isn't needed either. Wrapped in a trivial and[] rather than aliased directly so the operation's own name stays Just_Arrived_Level for Just_Arrived's R_TRIG to read, unchanged from before."
     expression:
       and:
         - {var: "Call_At_Current_Floor"}
@@ -330,7 +183,7 @@ operations:
 
   - name: "Door_Elapsed"
     type: "CTUD"
-    note: "Counts whole seconds since the last arrival. Resets on a fresh arrival OR on an obstruction -- R is edge-triggered, so a long continuous obstruction only resets once at the moment it starts. Unchanged from Elevator_System_1."
+    note: "Door timing resets on arrival or obstruction."
     CU: {var: "Clock_Pulse"}
     CD: {var: "Never"}
     R:
@@ -344,17 +197,15 @@ operations:
 
   - name: "Clock_Pulse"
     type: "TON"
-    note: "Free-running 1-second pulse, self-referencing only. Unchanged from Elevator_System_1 -- including its known PT+1 steady-state timing quirk, see note 5 above."
+    note: "Self-oscillating timer used as the door-timing clock."
     IN: {"!": {var: "Clock_Pulse"}}
     PT: {var: "One_Second"}
     output: "Clock_Pulse"
 
-  # --- Requests: per-floor "still pending" bookkeeping, cleared once served ---
-  # Unchanged from Elevator_System_1.
+  # --- Request state ---
 
   - name: "Floor0_Request"
     type: "RS"
-    note: "Remembered/pending indicator for floor 0, cleared once served. A pure sink -- nothing else reads this tag."
     Set: [{var: "Call_Floor0"}]
     Reset: [{and: [{var: "Doors_Open"}, {eq: [{var: "Current_Floor"}, 0]}]}]
     output: "Floor0_Request"
